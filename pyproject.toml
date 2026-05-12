@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prototype-feedback-server"
+version = "0.1.0"
+description = "Local ingest + browse server for Prototype Feedback browser-extension exports."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Sebastian Buurman" }]
+license = { text = "MIT" }
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.32.0",
+    "jinja2==3.1.4",
+    "python-multipart==0.0.12",
+    "google-auth==2.35.0",
+    "google-auth-oauthlib==1.2.1",
+    "google-api-python-client==2.149.0",
+]
+
+[project.scripts]
+prototype-feedback-server = "main:_cli"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.package-data]
+"*" = ["templates/*.html", "static/*.css"]

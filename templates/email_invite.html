@@ -1,0 +1,33 @@
+Subject: Please review: {{ project.name }}
+
+<p>Hi{% if reviewer.name %} {{ reviewer.name.split(' ')[0] }}{% endif %},</p>
+
+<p>I'd love your feedback on a prototype I'm working on{% if project.name %} — <strong>{{ project.name }}</strong>{% endif %}.</p>
+
+{% if project.description %}
+<p style="color:#444"><em>{{ project.description }}</em></p>
+{% endif %}
+
+{% if project.target_url %}
+<p><strong>Open the prototype:</strong> <a href="{{ project.target_url }}">{{ project.target_url }}</a></p>
+{% endif %}
+
+<p><strong>How to give feedback:</strong></p>
+<ol>
+  <li>Install the <em>Prototype Feedback</em> Chrome extension (one-time).</li>
+  <li>Open the prototype URL above.</li>
+  <li>Click the extension, set your name, then <strong>Start feedback session</strong>.</li>
+  <li>Click an element or drag a region, type your comment, attach images / Google Docs / Figma links if useful, then save.</li>
+  <li>When done, click <strong>Export JSON</strong> in the popup.</li>
+  <li>Reply to this email with the JSON file attached. That's it.</li>
+</ol>
+
+{% if extra_message %}
+<p style="border-left:3px solid #2563eb;padding-left:10px;color:#444">{{ extra_message }}</p>
+{% endif %}
+
+<p>Thanks!{% if project.owner_name %}<br>{{ project.owner_name }}{% endif %}</p>
+
+<p style="color:#94a3b8;font-size:11px;margin-top:30px">
+This invite was sent via Prototype Feedback. Reply to this email with the exported JSON; everything else stays private.
+</p>

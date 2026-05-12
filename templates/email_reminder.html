@@ -1,0 +1,13 @@
+Subject: Reminder: please review {{ project.name }}
+
+<p>Hi{% if reviewer.name %} {{ reviewer.name.split(' ')[0] }}{% endif %},</p>
+
+<p>Just a gentle nudge — I haven't received your feedback on <strong>{{ project.name }}</strong> yet.</p>
+
+{% if project.target_url %}
+<p>The prototype is here: <a href="{{ project.target_url }}">{{ project.target_url }}</a></p>
+{% endif %}
+
+<p>Even a couple of pinned comments would be hugely helpful. The original invite has the install + usage steps; reply to either email with the exported JSON when you're done.</p>
+
+<p>Thanks again!{% if project.owner_name %}<br>{{ project.owner_name }}{% endif %}</p>

@@ -1,0 +1,73 @@
+{% extends "layout.html" %}
+{% block title %}Comment — Prototype Feedback{% endblock %}
+{% block content %}
+
+<p class="breadcrumb">
+  <a href="/">Dashboard</a> →
+  <a href="/comments?batch={{ row.batch_id }}">Batch</a> →
+  Comment
+</p>
+
+<div class="detail">
+  <div class="detail-main">
+    <div class="text-block">{{ row.comment }}</div>
+
+    <div class="meta-grid">
+      <div><span class="label">Reviewer</span><span>{{ row.reviewer or "—" }}</span></div>
+      <div><span class="label">Project</span><span>{{ row.project or "—" }}</span></div>
+      <div><span class="label">Region type</span><span class="pill {{ row.region_type }}">{{ row.region_type }}</span></div>
+      <div><span class="label">Captured</span><span class="mono small">{{ (row.created_at or "")[:19].replace("T", " ") }}</span></div>
+      {% if row.edited_at %}<div><span class="label">Edited</span><span class="mono small">{{ row.edited_at[:19].replace("T", " ") }}</span></div>{% endif %}
+      <div><span class="label">Page</span><span><a href="{{ row.page_url }}" target="_blank" class="mono">{{ row.page_url }}</a></span></div>
+      {% if row.selector %}<div><span class="label">Selector</span><code class="mono small">{{ row.selector }}</code></div>{% endif %}
+      <div><span class="label">bbox</span><code class="mono small">x={{ bbox.x|round|int }}, y={{ bbox.y|round|int }}, w={{ bbox.w|round|int }}, h={{ bbox.h|round|int }}</code></div>
+      <div><span class="label">Viewport</span><code class="mono small">{{ viewport.w }}×{{ viewport.h }} (scroll {{ viewport.scrollX or 0 }}, {{ viewport.scrollY or 0 }})</code></div>
+    </div>
+
+    {% if atts %}
+      <h3>Attachments</h3>
+      <div class="attachments">
+        {% for a in atts %}
+          <div class="att att-{{ a.type }}">
+            {% if a.type == 'image' and a.data_path %}
+              <a href="/file/{{ a.data_path }}" target="_blank">
+                <img src="/file/{{ a.data_path }}" alt="{{ a.name }}">
+              </a>
+              <div class="att-name">{{ a.name }}</div>
+            {% elif a.type == 'file' and a.data_path %}
+              <a href="/file/{{ a.data_path }}" target="_blank" class="att-file">📄 {{ a.name }}</a>
+              <div class="muted small">{{ a.mime }}{% if a.size %} • {{ a.size }} bytes{% endif %}</div>
+            {% elif a.type == 'link' %}
+              <a href="{{ a.url }}" target="_blank" class="att-link">🔗 {{ a.title or a.url }}</a>
+              <div class="muted small">{{ a.kind }}</div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <h3>Claude prompt for the whole batch</h3>
+    <p class="muted small">Paste this in Claude Code (started in the prototype's repo):</p>
+    <pre class="claude-prompt">Read `data/batches/{{ row.batch_id }}/claude_input.json`. Follow `_llm_guide.how_to_apply`. Screenshots and attachments live alongside it.</pre>
+    <p class="small">
+      <a class="btn small" href="/batch/{{ row.batch_id }}/json" target="_blank">Open claude_input.json</a>
+      <a class="btn small" href="/batch/{{ row.batch_id }}/claude" target="_blank">Open claude_prompt.md</a>
+    </p>
+
+    <form method="post" action="/api/comment/{{ row.id }}/delete" onsubmit="return confirm('Delete this comment?')">
+      <button class="btn small danger">Delete this comment</button>
+    </form>
+  </div>
+
+  <aside class="detail-screenshot">
+    {% if row.screenshot_path %}
+      <a href="/file/{{ row.screenshot_path }}" target="_blank">
+        <img src="/file/{{ row.screenshot_path }}" alt="">
+      </a>
+    {% else %}
+      <div class="muted">No screenshot</div>
+    {% endif %}
+  </aside>
+</div>
+
+{% endblock %}

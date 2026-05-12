@@ -1,0 +1,199 @@
+{% extends "layout.html" %}
+{% block title %}{{ summary.project.name }} — Prototype Feedback{% endblock %}
+{% block content %}
+
+<p class="breadcrumb"><a href="/projects">Projects</a> → {{ summary.project.name }}</p>
+
+<div class="row" style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+  <div>
+    <h1 style="margin:0">{{ summary.project.name }}</h1>
+    {% if summary.project.description %}<p class="muted" style="margin:4px 0 0">{{ summary.project.description }}</p>{% endif %}
+  </div>
+  <form method="post" action="/api/projects/{{ summary.project.id }}/archive" onsubmit="return confirm('Archive project?')">
+    <button class="btn small">Archive</button>
+  </form>
+</div>
+
+<div class="meta-grid" style="margin-top:14px">
+  <div><span class="label">Target URL</span>
+    <span>
+      {% if summary.project.target_url %}
+        <a class="mono" href="{{ summary.project.target_url }}" target="_blank">{{ summary.project.target_url }}</a>
+      {% else %}<em class="muted">not set</em>{% endif %}
+    </span>
+  </div>
+  <div><span class="label">Owner</span>
+    <span>{{ summary.project.owner_name or "—" }} {% if summary.project.owner_email %}<span class="mono small muted">&lt;{{ summary.project.owner_email }}&gt;</span>{% endif %}</span>
+  </div>
+  <div><span class="label">Reviewers</span><span>{{ summary.reviewers|length }}</span></div>
+  <div><span class="label">Comments</span><span>{{ summary.comment_count }}</span></div>
+</div>
+
+{% if not g_status.authorized %}
+<div class="callout">
+  <strong>Google not connected.</strong> Connect to invite reviewers and send emails.
+  <a class="btn small primary" href="/auth/google">Connect Google</a>
+</div>
+{% endif %}
+
+<h2>Reviewers</h2>
+
+<div class="autocomplete">
+  <input type="text" id="ac-input" placeholder="Type a name or email to add a reviewer…" autocomplete="off" />
+  <div class="ac-results" id="ac-results"></div>
+</div>
+
+{% if summary.reviewers %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Reviewer</th>
+      <th>Status</th>
+      <th>Comments</th>
+      <th>Invited</th>
+      <th>Last reminded</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in summary.reviewers %}
+    <tr>
+      <td>{{ r.name or "—" }}<div class="mono small muted">{{ r.email }}</div></td>
+      <td><span class="pill">{{ r.status }}</span></td>
+      <td>{{ r.comments_count }}</td>
+      <td class="mono small">{{ (r.invited_at or "")[:19].replace("T", " ") or "—" }}</td>
+      <td class="mono small">{{ (r.last_reminded_at or "")[:19].replace("T", " ") or "—" }}</td>
+      <td>
+        <form method="post" action="/api/projects/{{ summary.project.id }}/reviewers/{{ r.id }}/delete"
+              onsubmit="return confirm('Remove {{ r.email }}?')" style="display:inline">
+          <button class="btn small danger">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<div class="row" style="display:flex;gap:8px;margin-top:10px">
+  <button class="btn primary" id="btn-invite" {% if not g_status.authorized %}disabled{% endif %}>Send invites (drafts)</button>
+  <button class="btn" id="btn-invite-send" {% if not g_status.authorized %}disabled{% endif %}>Send invites NOW</button>
+  <button class="btn" id="btn-remind" {% if not g_status.authorized %}disabled{% endif %}>Remind non-responders (drafts)</button>
+</div>
+<div id="action-status" class="status"></div>
+
+<h2>Comments ({{ comments|length }})</h2>
+{% if not comments %}
+  <p class="muted">No comments yet for this project.</p>
+{% else %}
+<table class="table comments">
+  <thead><tr><th></th><th>Comment</th><th>Reviewer</th><th>When</th><th></th></tr></thead>
+  <tbody>
+    {% for c in comments %}
+    <tr>
+      <td>{% if c.screenshot_path %}<a href="/comment/{{ c.id }}"><img class="thumb" src="/file/{{ c.screenshot_path }}"></a>{% endif %}</td>
+      <td class="comment-cell">
+        <div class="text">{{ c.comment }}</div>
+        {% if c.att_count %}<span class="pill attach">📎 {{ c.att_count }}</span>{% endif %}
+        <span class="pill {{ c.region_type }}">{{ c.region_type }}</span>
+      </td>
+      <td>{{ c.reviewer or c.reviewer_email or "—" }}</td>
+      <td class="mono small">{{ (c.created_at or "")[:19].replace("T", " ") }}</td>
+      <td><a class="btn small" href="/comment/{{ c.id }}">Open</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<script>
+const PID = {{ summary.project.id|tojson }};
+
+// Autocomplete
+const acInput = document.getElementById('ac-input');
+const acResults = document.getElementById('ac-results');
+let acTimer = null;
+acInput.addEventListener('input', () => {
+  clearTimeout(acTimer);
+  const q = acInput.value.trim();
+  if (q.length < 2) { acResults.innerHTML = ''; return; }
+  acTimer = setTimeout(async () => {
+    const r = await fetch('/api/people/search?q=' + encodeURIComponent(q));
+    const j = await r.json();
+    if (!j.authorized) {
+      acResults.innerHTML = '<div class="ac-msg">Connect Google to enable directory search</div>';
+      return;
+    }
+    const items = j.results || [];
+    acResults.innerHTML = '';
+    if (q.includes('@')) {
+      const node = document.createElement('div');
+      node.className = 'ac-item ac-manual';
+      node.innerHTML = `<strong>+ Add</strong> ${q}`;
+      node.onclick = () => addReviewer({email: q});
+      acResults.appendChild(node);
+    }
+    items.forEach(p => {
+      const node = document.createElement('div');
+      node.className = 'ac-item';
+      node.innerHTML = `<strong>${p.name || p.email}</strong> <span class="muted">${p.email}</span>${p.org_title ? '<div class="muted small">' + p.org_title + '</div>' : ''}`;
+      node.onclick = () => addReviewer(p);
+      acResults.appendChild(node);
+    });
+  }, 200);
+});
+
+async function addReviewer(p) {
+  const r = await fetch(`/api/projects/${PID}/reviewers`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({email: p.email, name: p.name})
+  });
+  if (r.ok) location.reload();
+}
+
+document.getElementById('btn-invite').onclick = () => sendInvite(true);
+document.getElementById('btn-invite-send').onclick = () => {
+  if (!confirm('Send invites NOW (no draft step)?')) return;
+  sendInvite(false);
+};
+document.getElementById('btn-remind').onclick = () => sendRemind(true);
+
+async function sendInvite(draftOnly) {
+  setStatus('Sending…');
+  const r = await fetch(`/api/projects/${PID}/invite`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({draft_only: draftOnly})
+  });
+  const j = await r.json();
+  if (!r.ok) { setStatus(`Failed: ${JSON.stringify(j)}`, true); return; }
+  const ok = (j.results || []).filter(x => x.ok).length;
+  const failed = (j.results || []).filter(x => !x.ok);
+  let msg = `Created ${ok} ${draftOnly ? 'draft(s)' : 'message(s)'}.`;
+  if (failed.length) msg += ' Errors: ' + failed.map(f => `${f.reviewer}: ${f.error}`).join('; ');
+  setStatus(msg);
+  setTimeout(() => location.reload(), 1500);
+}
+
+async function sendRemind(draftOnly) {
+  setStatus('Sending reminders…');
+  const r = await fetch(`/api/projects/${PID}/remind`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({draft_only: draftOnly})
+  });
+  const j = await r.json();
+  if (!r.ok) { setStatus(`Failed: ${JSON.stringify(j)}`, true); return; }
+  const ok = (j.results || []).filter(x => x.ok).length;
+  setStatus(`Created ${ok} reminder draft(s).`);
+}
+
+function setStatus(text, err) {
+  const el = document.getElementById('action-status');
+  el.textContent = text;
+  el.className = 'status' + (err ? ' err' : '');
+}
+</script>
+
+{% endblock %}

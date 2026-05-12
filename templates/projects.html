@@ -1,0 +1,99 @@
+{% extends "layout.html" %}
+{% block title %}Projects — Prototype Feedback{% endblock %}
+{% block content %}
+
+<div class="row" style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+  <h1 style="margin:0">Projects</h1>
+  <button class="btn primary" id="btn-new">+ New project</button>
+</div>
+
+{% if not g_status.authorized %}
+<div class="callout">
+  <strong>Google not connected.</strong>
+  Sending invites and querying the Workspace directory require connecting your account.
+  <a class="btn small primary" href="/auth/google">Connect Google</a>
+  {% if g_status.error %}<div class="muted small">{{ g_status.error }}</div>{% endif %}
+</div>
+{% else %}
+<div class="callout ok">
+  <strong>Google connected.</strong>
+  <form method="post" action="/auth/google/revoke" style="display:inline">
+    <button class="btn small">Disconnect</button>
+  </form>
+</div>
+{% endif %}
+
+{% if not projects %}
+  <p class="muted">No projects yet. Create one to start inviting reviewers.</p>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Project</th>
+      <th>Target URL</th>
+      <th>Reviewers</th>
+      <th>Comments</th>
+      <th>Updated</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in projects %}
+    <tr>
+      <td>
+        <a href="/project/{{ p.id }}"><strong>{{ p.name }}</strong></a>
+        {% if p.description %}<div class="muted small truncate">{{ p.description }}</div>{% endif %}
+      </td>
+      <td class="mono small truncate">
+        {% if p.target_url %}<a href="{{ p.target_url }}" target="_blank">{{ p.target_url }}</a>{% else %}—{% endif %}
+      </td>
+      <td>{{ p.reviewer_count }}</td>
+      <td>{{ p.comment_count }}</td>
+      <td class="mono small">{{ p.updated_at[:19].replace("T", " ") }}</td>
+      <td><a class="btn small" href="/project/{{ p.id }}">Open</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<!-- Create project modal -->
+<div class="modal" id="modal-new">
+  <div class="modal-card">
+    <h2>New project</h2>
+    <label>Name</label>
+    <input type="text" id="np-name" placeholder="Dashboard v2 review" />
+    <label style="margin-top:8px">Description (what to focus on)</label>
+    <textarea id="np-desc" rows="3" placeholder="Focus on the metrics section and cohort filter UX."></textarea>
+    <label style="margin-top:8px">Target URL</label>
+    <input type="text" id="np-url" placeholder="https://staging.app.com/dashboard" />
+    <div class="row" style="margin-top:10px;justify-content:flex-end;gap:8px;display:flex">
+      <button class="btn" id="np-cancel">Cancel</button>
+      <button class="btn primary" id="np-save">Create</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+$('btn-new').onclick = () => $('modal-new').classList.add('open');
+$('np-cancel').onclick = () => $('modal-new').classList.remove('open');
+$('np-save').onclick = async () => {
+  const body = {
+    name: $('np-name').value.trim(),
+    description: $('np-desc').value.trim(),
+    target_url: $('np-url').value.trim()
+  };
+  if (!body.name) { alert('Name required'); return; }
+  const r = await fetch('/api/projects', {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+  const j = await r.json();
+  if (j.id) location.href = '/project/' + j.id;
+  else alert('Failed: ' + JSON.stringify(j));
+};
+</script>
+
+{% endblock %}

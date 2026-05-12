@@ -1,0 +1,107 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<section class="hero">
+  <h1>Drop a feedback JSON to ingest</h1>
+  <p class="muted">Files exported from the Prototype Feedback browser extension.</p>
+
+  <div id="dropzone" class="dropzone">
+    <p>Drop one or more <code>prototype-feedback_*.json</code> files here</p>
+    <p class="muted">or</p>
+    <label class="btn primary">
+      Choose files
+      <input type="file" id="file-input" accept="application/json,.json" multiple hidden />
+    </label>
+    <div id="ingest-status" class="status"></div>
+  </div>
+</section>
+
+<section class="stats">
+  <div class="stat"><div class="n">{{ batches|length }}</div><div class="label">batches</div></div>
+  <div class="stat"><div class="n">{{ total_comments }}</div><div class="label">comments</div></div>
+  <div class="stat"><div class="n">{{ reviewers|length }}</div><div class="label">reviewers</div></div>
+  <div class="stat"><div class="n">{{ projects|length }}</div><div class="label">projects</div></div>
+</section>
+
+<section>
+  <h2>Recent batches</h2>
+  {% if not batches %}
+    <p class="muted">No batches ingested yet.</p>
+  {% else %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Ingested</th>
+        <th>Reviewer</th>
+        <th>Project</th>
+        <th>Source</th>
+        <th>Comments</th>
+        <th>Claude</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in batches %}
+      <tr>
+        <td class="mono small">{{ b.ingested_at[:19].replace("T", " ") }}</td>
+        <td>{{ b.reviewer or "—" }}</td>
+        <td>{{ b.project or "—" }}</td>
+        <td class="mono small truncate" title="{{ b.source_filename }}">{{ b.source_filename or "—" }}</td>
+        <td>
+          <a href="/comments?batch={{ b.id }}">{{ b.actual_count }}</a>
+        </td>
+        <td>
+          <a href="/batch/{{ b.id }}/claude" target="_blank" class="btn small">Prompt</a>
+          <a href="/batch/{{ b.id }}/json" target="_blank" class="btn small">JSON</a>
+        </td>
+        <td>
+          <form method="post" action="/api/batch/{{ b.id }}/delete" onsubmit="return confirm('Delete this batch and all its files?')">
+            <button class="btn small danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<script>
+const dz = document.getElementById('dropzone');
+const fi = document.getElementById('file-input');
+const status = document.getElementById('ingest-status');
+
+['dragenter','dragover'].forEach(e => dz.addEventListener(e, ev => {
+  ev.preventDefault(); dz.classList.add('over');
+}));
+['dragleave','drop'].forEach(e => dz.addEventListener(e, ev => {
+  ev.preventDefault(); dz.classList.remove('over');
+}));
+dz.addEventListener('drop', ev => upload(ev.dataTransfer.files));
+fi.addEventListener('change', ev => upload(ev.target.files));
+
+async function upload(filesList) {
+  const files = Array.from(filesList || []);
+  if (!files.length) return;
+  status.textContent = `Uploading ${files.length} file(s)…`;
+  const fd = new FormData();
+  files.forEach(f => fd.append('files', f, f.name));
+  try {
+    const resp = await fetch('/api/ingest', { method: 'POST', body: fd });
+    const json = await resp.json();
+    const ok = (json.results || []).filter(r => r.ok).length;
+    const failed = (json.results || []).filter(r => !r.ok);
+    status.innerHTML = `Ingested ${ok} of ${files.length}.`;
+    if (failed.length) {
+      status.innerHTML += '<br><span class="err">Errors: '
+        + failed.map(f => `${f.filename}: ${f.error}`).join('; ')
+        + '</span>';
+    }
+    setTimeout(() => location.reload(), 800);
+  } catch (e) {
+    status.innerHTML = `<span class="err">Upload failed: ${e.message}</span>`;
+  }
+}
+</script>
+
+{% endblock %}

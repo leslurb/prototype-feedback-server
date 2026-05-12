@@ -1,0 +1,66 @@
+{% extends "layout.html" %}
+{% block title %}Comments — Prototype Feedback{% endblock %}
+{% block content %}
+
+<h1>Comments</h1>
+
+<form class="filters" method="get" action="/comments">
+  <input type="text" name="q" placeholder="Search comment text or URL" value="{{ filters.q or '' }}" />
+  <input type="text" name="reviewer" placeholder="Reviewer" value="{{ filters.reviewer or '' }}" />
+  <input type="text" name="project" placeholder="Project" value="{{ filters.project or '' }}" />
+  {% if filters.batch %}<input type="hidden" name="batch" value="{{ filters.batch }}" />{% endif %}
+  <button class="btn">Filter</button>
+  {% if filters.q or filters.reviewer or filters.project or filters.batch %}
+    <a class="btn small" href="/comments">Clear</a>
+  {% endif %}
+</form>
+
+{% if not rows %}
+  <p class="muted">No comments match.</p>
+{% else %}
+<table class="table comments">
+  <thead>
+    <tr>
+      <th></th>
+      <th>Comment</th>
+      <th>Where</th>
+      <th>Reviewer</th>
+      <th>Project</th>
+      <th>When</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>
+        {% if r.screenshot_path %}
+          <a href="/comment/{{ r.id }}">
+            <img class="thumb" src="/file/{{ r.screenshot_path }}" alt="">
+          </a>
+        {% endif %}
+      </td>
+      <td class="comment-cell">
+        <div class="text">{{ r.comment or "" }}</div>
+        {% if att_counts.get(r.id, 0) %}
+          <span class="pill attach">📎 {{ att_counts[r.id] }}</span>
+        {% endif %}
+        <span class="pill {{ r.region_type }}">{{ r.region_type }}</span>
+      </td>
+      <td class="small">
+        <a href="{{ r.page_url }}" target="_blank" class="mono truncate">{{ r.page_url }}</a>
+        {% if r.selector %}<div class="mono small muted truncate" title="{{ r.selector }}">{{ r.selector }}</div>{% endif %}
+      </td>
+      <td>{{ r.reviewer or "—" }}</td>
+      <td>{{ r.project or "—" }}</td>
+      <td class="mono small">{{ (r.created_at or "")[:19].replace("T", " ") }}</td>
+      <td>
+        <a class="btn small" href="/comment/{{ r.id }}">Open</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% endblock %}

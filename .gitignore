@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+data/feedback.db
+data/feedback.db-journal
+data/feedback.db-wal
+data/feedback.db-shm
+data/google_token.json
+data/google_client_secret.json
+data/batches/
+.DS_Store
+*.bak
+.env
