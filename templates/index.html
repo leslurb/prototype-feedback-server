@@ -2,15 +2,15 @@
 {% block content %}
 
 <section class="hero">
-  <h1>Drop a feedback JSON to ingest</h1>
-  <p class="muted">Files exported from the Prototype Feedback browser extension.</p>
+  <h1>Drop a feedback export to ingest</h1>
+  <p class="muted">JSON or ZIP files exported from the Prototype Feedback browser extension.</p>
 
   <div id="dropzone" class="dropzone">
-    <p>Drop one or more <code>prototype-feedback_*.json</code> files here</p>
+    <p>Drop one or more <code>prototype-feedback_*.zip</code> (or legacy <code>.json</code>) files here</p>
     <p class="muted">or</p>
     <label class="btn primary">
       Choose files
-      <input type="file" id="file-input" accept="application/json,.json" multiple hidden />
+      <input type="file" id="file-input" accept=".zip,.json,application/zip,application/json" multiple hidden />
     </label>
     <div id="ingest-status" class="status"></div>
   </div>

@@ -6,10 +6,14 @@ or:  run.bat
 from __future__ import annotations
 
 import base64
+import io
 import json
 import re
+import shutil
 import sqlite3
+import tempfile
 import uuid
+import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -183,8 +187,12 @@ def now_iso() -> str:
 # ---- Ingest ----------------------------------------------------------------
 
 
-def ingest_payload(payload: dict, source_filename: str) -> str:
-    """Insert a batch + its comments + attachments. Returns batch_id."""
+def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Path] = None) -> str:
+    """Insert a batch + its comments + attachments. Returns batch_id.
+
+    For v1/v2 payloads, screenshots/attachments come from inline base64.
+    For v3 payloads, they come from files inside source_dir (the unzipped temp dir).
+    """
     if not isinstance(payload, dict) or "comments" not in payload:
         raise HTTPException(400, "JSON missing 'comments' array")
 
@@ -221,7 +229,20 @@ def ingest_payload(payload: dict, source_filename: str) -> str:
         for cm in comments:
             cid = cm.get("id") or str(uuid.uuid4())
             screenshot_path = None
-            if cm.get("screenshot_png_b64"):
+
+            # v3: screenshot_path points at a file inside source_dir
+            if cm.get("screenshot_path") and source_dir is not None:
+                src = (source_dir / cm["screenshot_path"]).resolve()
+                if not str(src).startswith(str(source_dir.resolve())):
+                    raise HTTPException(400, f"screenshot_path escapes archive: {cm['screenshot_path']}")
+                if src.exists():
+                    rel = f"batches/{batch_id}/screenshots/{cid}.png"
+                    dst = DATA / rel
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src, dst)
+                    screenshot_path = rel
+            # v1/v2: screenshot_png_b64 inline
+            elif cm.get("screenshot_png_b64"):
                 rel = f"batches/{batch_id}/screenshots/{cid}.png"
                 write_b64(cm["screenshot_png_b64"], DATA / rel)
                 screenshot_path = rel
@@ -280,7 +301,20 @@ def ingest_payload(payload: dict, source_filename: str) -> str:
             for at in cm.get("attachments") or []:
                 aid = str(uuid.uuid4())
                 rel: Optional[str] = None
-                if at.get("type") in ("image", "file") and at.get("data_b64"):
+
+                # v3: attachment.path points at a file inside source_dir
+                if at.get("type") in ("image", "file") and at.get("path") and source_dir is not None:
+                    src = (source_dir / at["path"]).resolve()
+                    if not str(src).startswith(str(source_dir.resolve())):
+                        raise HTTPException(400, f"attachment path escapes archive: {at['path']}")
+                    if src.exists():
+                        fn = f"{aid}__{safe_filename(at.get('name', 'file'))}"
+                        rel = f"batches/{batch_id}/attachments/{fn}"
+                        dst = DATA / rel
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(src, dst)
+                # v1/v2: data_b64 inline
+                elif at.get("type") in ("image", "file") and at.get("data_b64"):
                     fn = f"{aid}__{safe_filename(at.get('name', 'file'))}"
                     rel = f"batches/{batch_id}/attachments/{fn}"
                     write_b64(at["data_b64"], DATA / rel)
@@ -522,9 +556,26 @@ async def api_ingest(files: list[UploadFile] = File(...)):
     for f in files:
         try:
             raw = await f.read()
-            payload = json.loads(raw.decode("utf-8"))
-            batch_id = ingest_payload(payload, f.filename or "uploaded.json")
-            results.append({"ok": True, "batch_id": batch_id, "filename": f.filename})
+            fname = f.filename or "uploaded"
+            is_zip = fname.lower().endswith(".zip") or (raw[:4] == b"PK\x03\x04")
+            if is_zip:
+                with tempfile.TemporaryDirectory(prefix="pfb-ingest-") as tmpdir:
+                    tmp = Path(tmpdir)
+                    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                        for n in zf.namelist():
+                            np = (tmp / n).resolve()
+                            if not str(np).startswith(str(tmp.resolve())):
+                                raise HTTPException(400, f"zip entry escapes archive: {n}")
+                        zf.extractall(tmp)
+                    fj = tmp / "feedback.json"
+                    if not fj.exists():
+                        raise HTTPException(400, "ZIP missing feedback.json at root")
+                    payload = json.loads(fj.read_text(encoding="utf-8"))
+                    batch_id = ingest_payload(payload, fname, source_dir=tmp)
+            else:
+                payload = json.loads(raw.decode("utf-8"))
+                batch_id = ingest_payload(payload, fname)
+            results.append({"ok": True, "batch_id": batch_id, "filename": fname})
         except HTTPException as e:
             results.append({"ok": False, "error": e.detail, "filename": f.filename})
         except Exception as e:
