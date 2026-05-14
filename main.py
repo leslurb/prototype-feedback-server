@@ -160,6 +160,8 @@ def init_db() -> None:
         if not _column_exists(c, "comments", "reviewer_email"):
             c.execute("ALTER TABLE comments ADD COLUMN reviewer_email TEXT")
             c.execute("CREATE INDEX IF NOT EXISTS idx_comments_reviewer_email ON comments(reviewer_email)")
+        if not _column_exists(c, "comments", "viewport_path"):
+            c.execute("ALTER TABLE comments ADD COLUMN viewport_path TEXT")
 
 
 init_db()
@@ -178,6 +180,60 @@ def safe_filename(name: str) -> str:
 def write_b64(b64: str, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(base64.b64decode(b64))
+
+
+KIND_ICON = {
+    "google_doc": "📄", "google_sheet": "📊", "google_slide": "📑",
+    "google_form": "📝", "google_docs": "📁", "google_drive": "🗂",
+    "figma": "🎨", "notion": "📓", "github": "💻", "loom": "🎥",
+    "miro": "🧩", "link": "🔗",
+}
+
+
+def _format_report_ts(iso: Optional[str]) -> str:
+    if not iso:
+        return ""
+    try:
+        d = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
+        date_part = d.strftime("%b ") + str(d.day) + d.strftime(", %Y")
+        hour12 = d.hour % 12 or 12
+        ampm = "AM" if d.hour < 12 else "PM"
+        time_part = f"{hour12}:{d.minute:02d} {ampm}"
+        return f"{date_part} · {time_part}"
+    except Exception:
+        return iso
+
+
+def _format_report_clock(iso: Optional[str]) -> str:
+    if not iso:
+        return ""
+    try:
+        return iso[11:19]
+    except Exception:
+        return ""
+
+
+def _parse_page_url(url: Optional[str]) -> tuple[str, str, bool]:
+    if not url:
+        return "", "", False
+    try:
+        from urllib.parse import urlparse, parse_qsl
+        u = urlparse(url)
+        pathname = u.path or "/"
+        params = ", ".join(f"{k}={v}" for k, v in parse_qsl(u.query, keep_blank_values=True))
+        return pathname, params, True
+    except Exception:
+        return url, "", False
+
+
+def _file_to_data_url(rel_path: Optional[str], mime: str = "image/png") -> Optional[str]:
+    if not rel_path:
+        return None
+    p = DATA / rel_path
+    if not p.exists():
+        return None
+    b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{b64}"
 
 
 def now_iso() -> str:
@@ -204,6 +260,12 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
     batch_dir = BATCHES / batch_id
     (batch_dir / "screenshots").mkdir(parents=True, exist_ok=True)
     (batch_dir / "attachments").mkdir(parents=True, exist_ok=True)
+    (batch_dir / "viewport-screenshots").mkdir(parents=True, exist_ok=True)
+
+    if source_dir is not None:
+        src_json = source_dir / "feedback.json"
+        if src_json.exists():
+            shutil.copyfile(src_json, batch_dir / "feedback.json")
 
     comments = payload.get("comments", []) or []
 
@@ -247,6 +309,18 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
                 write_b64(cm["screenshot_png_b64"], DATA / rel)
                 screenshot_path = rel
 
+            viewport_path = None
+            if cm.get("viewport_screenshot_path") and source_dir is not None:
+                src = (source_dir / cm["viewport_screenshot_path"]).resolve()
+                if not str(src).startswith(str(source_dir.resolve())):
+                    raise HTTPException(400, f"viewport_screenshot_path escapes archive: {cm['viewport_screenshot_path']}")
+                if src.exists():
+                    rel = f"batches/{batch_id}/viewport-screenshots/{cid}.png"
+                    dst = DATA / rel
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src, dst)
+                    viewport_path = rel
+
             reviewer_name = cm.get("reviewer") or payload.get("reviewer")
             reviewer_email = cm.get("reviewer_email") or payload.get("reviewer_email")
             project_label = cm.get("project") or payload.get("project")
@@ -267,8 +341,8 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
                 """INSERT INTO comments
                    (id, batch_id, created_at, edited_at, page_url, page_title,
                     region_type, selector, bbox_json, viewport_json, screenshot_path,
-                    comment, reviewer, reviewer_email, project, project_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    viewport_path, comment, reviewer, reviewer_email, project, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     cid,
                     batch_id,
@@ -281,6 +355,7 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
                     json.dumps(cm.get("bbox") or {}),
                     json.dumps(cm.get("viewport") or {}),
                     screenshot_path,
+                    viewport_path,
                     cm.get("comment"),
                     reviewer_name,
                     reviewer_email,
@@ -629,6 +704,109 @@ def batch_claude_json(batch_id: str):
     if not p.exists():
         raise HTTPException(404)
     return FileResponse(p, media_type="application/json")
+
+
+@app.get("/batch/{batch_id}/report.html", response_class=HTMLResponse)
+def batch_report_html(batch_id: str, request: Request):
+    with db() as c:
+        b = c.execute("SELECT * FROM batches WHERE id = ?", (batch_id,)).fetchone()
+        if not b:
+            raise HTTPException(404, "Batch not found")
+        comment_rows = c.execute(
+            "SELECT * FROM comments WHERE batch_id = ? ORDER BY created_at", (batch_id,)
+        ).fetchall()
+        attachments_by_comment: dict[str, list] = {}
+        for cm in comment_rows:
+            ats = c.execute(
+                "SELECT * FROM attachments WHERE comment_id = ? ORDER BY id", (cm["id"],)
+            ).fetchall()
+            attachments_by_comment[cm["id"]] = [dict(a) for a in ats]
+
+    comments: list[dict] = []
+    pages = set()
+    element_pins = 0
+    region_pins = 0
+    for cm in comment_rows:
+        bbox = json.loads(cm["bbox_json"] or "{}")
+        pathname, params, url_ok = _parse_page_url(cm["page_url"])
+        if url_ok:
+            pages.add(pathname)
+        if cm["region_type"] == "element":
+            element_pins += 1
+        else:
+            region_pins += 1
+
+        viewport_data = _file_to_data_url(cm["viewport_path"]) if "viewport_path" in cm.keys() else None
+        crop_data = _file_to_data_url(cm["screenshot_path"])
+        left_image = viewport_data or crop_data
+
+        ats_out: list[dict] = []
+        for at in attachments_by_comment.get(cm["id"], []):
+            if at.get("type") == "link":
+                ats_out.append({
+                    "type": "link",
+                    "url": at.get("url"),
+                    "title": at.get("title"),
+                    "icon": KIND_ICON.get(at.get("kind"), KIND_ICON["link"]),
+                })
+            else:
+                mime = at.get("mime") or ("image/png" if at.get("type") == "image" else "application/octet-stream")
+                ats_out.append({
+                    "type": at.get("type"),
+                    "name": at.get("name"),
+                    "data_url": _file_to_data_url(at.get("data_path"), mime),
+                })
+
+        comments.append({
+            "id": cm["id"],
+            "page_url": cm["page_url"],
+            "pathname": pathname,
+            "params": params,
+            "url_ok": url_ok,
+            "region_type": cm["region_type"],
+            "selector": cm["selector"],
+            "bbox": bbox,
+            "comment": cm["comment"],
+            "left_image_data_url": left_image,
+            "crop_data_url": crop_data,
+            "formatted_ts": _format_report_ts(cm["created_at"]),
+            "attachments": ats_out,
+        })
+
+    console_log: list[dict] = []
+    src_json = BATCHES / batch_id / "feedback.json"
+    if src_json.exists():
+        try:
+            raw = json.loads(src_json.read_text(encoding="utf-8"))
+            for e in (raw.get("console_log") or []):
+                console_log.append({
+                    "ts": e.get("ts"),
+                    "clock": _format_report_clock(e.get("ts")),
+                    "level": e.get("level", "error"),
+                    "message": e.get("message", ""),
+                    "source": e.get("source"),
+                    "line": e.get("line"),
+                })
+        except Exception:
+            pass
+
+    project_label = b["project"] or "Prototype"
+    title = f"{project_label} — Feedback Report"
+
+    return templates.TemplateResponse(
+        "report.html.j2",
+        {
+            "request": request,
+            "title": title,
+            "reviewer": b["reviewer"],
+            "generated_at": _format_report_ts(now_iso()),
+            "comments": comments,
+            "console_log": console_log,
+            "pages_reviewed": len(pages),
+            "element_pins": element_pins,
+            "region_pins": region_pins,
+        },
+    )
 
 
 # ---- Projects --------------------------------------------------------------

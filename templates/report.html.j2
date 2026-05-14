@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ title }}</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f7; color: #1d1d1f; }
+.report-header { background: #1d1d1f; color: #f5f5f7; padding: 32px 48px; }
+.report-header h1 { font-size: 28px; font-weight: 600; margin-bottom: 8px; }
+.report-meta { display: flex; gap: 32px; font-size: 13px; color: #a1a1a6; margin-top: 12px; }
+.report-meta span strong { color: #f5f5f7; }
+.comments-container { max-width: 1100px; margin: 32px auto; padding: 0 24px; }
+.comment-card { background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 16px rgba(0,0,0,0.05); margin-bottom: 28px; overflow: hidden; }
+.comment-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 1px solid #f0f0f0; background: #fafafa; }
+.comment-number { width: 28px; height: 28px; border-radius: 50%; background: #0071e3; color: #fff; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.comment-page { font-size: 12px; color: #6e6e73; margin-left: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comment-page a { color: #0071e3; text-decoration: none; }
+.comment-page a:hover { text-decoration: underline; }
+.comment-timestamp { font-size: 11px; color: #a1a1a6; white-space: nowrap; margin-left: 16px; }
+.comment-body { display: flex; }
+.comment-screenshot { flex-shrink: 0; width: 360px; background: #f5f5f7; border-right: 1px solid #f0f0f0; display: flex; align-items: flex-start; justify-content: center; padding: 16px; }
+.comment-screenshot img { max-width: 100%; max-height: 320px; object-fit: contain; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
+.comment-content { flex: 1; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+.comment-text { font-size: 15px; line-height: 1.6; color: #1d1d1f; white-space: pre-wrap; }
+.comment-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+.meta-tag { display: inline-flex; align-items: center; gap: 4px; background: #f5f5f7; border: 1px solid #e5e5ea; border-radius: 6px; padding: 4px 10px; font-size: 11px; color: #6e6e73; }
+.meta-tag .label { font-weight: 600; color: #1d1d1f; }
+.meta-tag.region { background: #fff3e0; border-color: #ffb74d; }
+.meta-tag.element { background: #e8f5e9; border-color: #81c784; }
+.selector-tag { background: #f0f4ff; border: 1px solid #c5cff5; border-radius: 6px; padding: 6px 10px; font-size: 11px; font-family: "SF Mono", Menlo, monospace; color: #3451b2; word-break: break-all; }
+.pin-detail { background: #f9f9fb; border: 1px solid #e5e5ea; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.pin-detail-label { font-size: 11px; font-weight: 600; color: #6e6e73; text-transform: uppercase; letter-spacing: 0.05em; }
+.pin-detail img { max-width: 100%; border-radius: 4px; border: 1px solid #e0e0e0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.summary-bar { background: #fff; border-radius: 12px; padding: 20px 24px; margin-bottom: 28px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); display: flex; gap: 32px; align-items: center; }
+.summary-stat { text-align: center; }
+.summary-stat .value { font-size: 28px; font-weight: 700; color: #0071e3; }
+.summary-stat .key { font-size: 12px; color: #6e6e73; margin-top: 2px; }
+.summary-divider { width: 1px; height: 40px; background: #e5e5ea; }
+.console-section { background: #fff; border-radius: 12px; padding: 16px 24px; margin-bottom: 28px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.console-section summary { cursor: pointer; font-size: 14px; font-weight: 600; color: #1d1d1f; list-style: none; padding: 4px 0; }
+.console-section summary::-webkit-details-marker { display: none; }
+.console-list { list-style: none; padding-top: 12px; }
+.console-list li { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid #f0f0f0; font-size: 12px; align-items: baseline; }
+.console-list time { color: #a1a1a6; font-family: "SF Mono", Menlo, monospace; flex-shrink: 0; }
+.console-list .level-pill { text-transform: uppercase; font-size: 10px; font-weight: 600; letter-spacing: 0.05em; padding: 2px 6px; border-radius: 4px; flex-shrink: 0; }
+.console-list .level-error { background: #fde2e2; color: #b91c1c; }
+.console-list .level-warn { background: #fef3c7; color: #92400e; }
+.console-list .msg { flex: 1; color: #1d1d1f; word-break: break-word; }
+.console-list .origin { font-family: "SF Mono", Menlo, monospace; color: #6e6e73; font-size: 11px; flex-shrink: 0; }
+.attachments-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.attachment-chip { display: inline-flex; align-items: center; gap: 6px; background: #f5f5f7; border: 1px solid #e5e5ea; border-radius: 6px; padding: 6px 10px; font-size: 12px; color: #1d1d1f; text-decoration: none; }
+.attachment-chip:hover { background: #ececec; }
+.attachment-chip.link { background: #e8f0ff; border-color: #c5cff5; color: #3451b2; }
+.attachment-chip.image img { width: 64px; height: 64px; object-fit: cover; border-radius: 4px; }
+.attachment-chip.file { background: #fff8e1; border-color: #ffe0a3; }
+.empty { text-align: center; padding: 48px; color: #6e6e73; font-size: 14px; }
+@media (max-width: 700px) {
+  .comment-body { flex-direction: column; }
+  .comment-screenshot { width: 100%; border-right: none; border-bottom: 1px solid #f0f0f0; }
+  .report-header { padding: 20px 16px; }
+  .report-meta { flex-wrap: wrap; gap: 12px; }
+}
+</style>
+</head>
+<body>
+<header class="report-header">
+  <h1>{{ title }}</h1>
+  <div class="report-meta">
+    <span>Reviewer: <strong>{{ reviewer or 'anon' }}</strong></span>
+    <span>Generated: <strong>{{ generated_at }}</strong></span>
+    <span>Source: <strong>{{ comments|length }} comment{{ '' if comments|length == 1 else 's' }}</strong></span>
+  </div>
+</header>
+<main class="comments-container">
+
+  <section class="summary-bar">
+    <div class="summary-stat"><div class="value">{{ comments|length }}</div><div class="key">Total comments</div></div>
+    <div class="summary-divider"></div>
+    <div class="summary-stat"><div class="value">{{ pages_reviewed }}</div><div class="key">Pages reviewed</div></div>
+    <div class="summary-divider"></div>
+    <div class="summary-stat"><div class="value">{{ element_pins }}</div><div class="key">Element pins</div></div>
+    <div class="summary-divider"></div>
+    <div class="summary-stat"><div class="value">{{ region_pins }}</div><div class="key">Region pins</div></div>
+  </section>
+
+  {% if console_log and console_log|length > 0 %}
+  <section class="console-section">
+    <details>
+      <summary>⚠ Console errors and warnings ({{ console_log|length }})</summary>
+      <ul class="console-list">
+        {% for e in console_log %}
+          <li>
+            <time>{{ e.clock }}</time>
+            <span class="level-pill level-{{ e.level }}">{{ e.level }}</span>
+            <span class="msg">{{ e.message }}</span>
+            {% if e.source %}<span class="origin">{{ e.source }}{% if e.line %}:{{ e.line }}{% endif %}</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+  </section>
+  {% endif %}
+
+  {% if comments|length == 0 %}
+    <p class="empty">No comments captured yet.</p>
+  {% endif %}
+
+  {% for c in comments %}
+    <article class="comment-card">
+      <header class="comment-header">
+        <div class="comment-number">{{ loop.index }}</div>
+        <div class="comment-page">
+          {% if c.url_ok %}
+            <a href="{{ c.page_url }}" target="_blank" rel="noopener">↗ Open page</a>
+            <span>{{ c.pathname }}</span>
+          {% else %}
+            <span>{{ c.page_url }}</span>
+          {% endif %}
+        </div>
+        <div class="comment-timestamp">{{ c.formatted_ts }}</div>
+      </header>
+      <div class="comment-body">
+        <div class="comment-screenshot">
+          {% if c.left_image_data_url %}
+            <img src="{{ c.left_image_data_url }}" alt="">
+          {% endif %}
+        </div>
+        <div class="comment-content">
+          <div class="comment-text">{{ c.comment }}</div>
+          <div class="comment-meta">
+            <span class="meta-tag {{ c.region_type }}"><span class="label">Type:</span>
+              {{ 'Element pin' if c.region_type == 'element' else 'Region pin' }}</span>
+            <span class="meta-tag"><span class="label">Page:</span> {{ c.pathname }}</span>
+            {% if c.params %}
+              <span class="meta-tag"><span class="label">Params:</span> {{ c.params }}</span>
+            {% endif %}
+            {% if c.region_type != 'element' and c.bbox %}
+              <span class="meta-tag"><span class="label">Bbox:</span>
+                x={{ c.bbox.x|int }}, y={{ c.bbox.y|int }}, w={{ c.bbox.w|int }}, h={{ c.bbox.h|int }}</span>
+            {% endif %}
+          </div>
+          {% if c.region_type == 'element' and c.selector %}
+            <div class="selector-tag">{{ c.selector }}</div>
+          {% endif %}
+          {% if c.attachments and c.attachments|length > 0 %}
+            <div class="attachments-row">
+              {% for a in c.attachments %}
+                {% if a.type == 'link' %}
+                  <a class="attachment-chip link" href="{{ a.url }}" target="_blank" rel="noopener">{{ a.icon }} {{ a.title or a.url }}</a>
+                {% elif a.type == 'image' and a.data_url %}
+                  <a class="attachment-chip image" href="{{ a.data_url }}" target="_blank"><img src="{{ a.data_url }}" alt="{{ a.name or '' }}"></a>
+                {% elif a.type == 'file' and a.data_url %}
+                  <a class="attachment-chip file" href="{{ a.data_url }}" download="{{ a.name or 'file' }}">📎 {{ a.name or 'file' }}</a>
+                {% endif %}
+              {% endfor %}
+            </div>
+          {% endif %}
+          <div class="pin-detail">
+            <div class="pin-detail-label">{{ 'Pinned element' if c.region_type == 'element' else 'Pinned region' }}</div>
+            {% if c.crop_data_url %}
+              <img src="{{ c.crop_data_url }}" alt="">
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </article>
+  {% endfor %}
+
+</main>
+</body>
+</html>
