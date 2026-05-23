@@ -11,6 +11,7 @@ import json
 import re
 import shutil
 import sqlite3
+import sys
 import tempfile
 import uuid
 import zipfile
@@ -25,16 +26,27 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-ROOT = Path(__file__).parent
-DATA = ROOT / "data"
+def _get_bundle_dir():
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent
+
+def _get_data_dir():
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).parent / "data"
+    return Path(__file__).parent / "data"
+
+BUNDLE_DIR = _get_bundle_dir()
+ROOT = Path(__file__).parent if not getattr(sys, 'frozen', False) else Path(sys.executable).parent
+DATA = _get_data_dir()
 BATCHES = DATA / "batches"
 DB_PATH = DATA / "feedback.db"
 DATA.mkdir(exist_ok=True)
 BATCHES.mkdir(exist_ok=True)
 
 app = FastAPI(title="Prototype Feedback")
-app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
-templates = Jinja2Templates(directory=ROOT / "templates")
+app.mount("/static", StaticFiles(directory=BUNDLE_DIR / "static"), name="static")
+templates = Jinja2Templates(directory=BUNDLE_DIR / "templates")
 
 # Allow the extension popup (any chrome-extension://) to call /api/*.
 app.add_middleware(
