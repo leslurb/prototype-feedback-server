@@ -19,8 +19,13 @@ Subject: Please review: {{ project.name }}
   <li>Click the extension, set your name, then <strong>Start feedback session</strong>.</li>
   <li>Click an element or drag a region, type your comment, attach images / Google Docs / Figma links if useful, then save.</li>
   <li>When done, click <strong>Export JSON</strong> in the popup.</li>
-  <li>Reply to this email with the JSON file attached. That's it.</li>
+  <li>When done, click <strong>Export ZIP</strong> to download{% if project.drive_folder_id %}, or <strong>Upload to Drive</strong> to send directly{% endif %}.</li>
 </ol>
+
+{% if project.drive_folder_id %}
+<p><strong>Upload your feedback:</strong> When done, click <em>Upload to Drive</em> in the extension popup. Your feedback will go directly to
+<a href="https://drive.google.com/drive/folders/{{ project.drive_folder_id }}">this shared folder</a> — no email attachment needed.</p>
+{% endif %}
 
 {% if extra_message %}
 <p style="border-left:3px solid #2563eb;padding-left:10px;color:#444">{{ extra_message }}</p>

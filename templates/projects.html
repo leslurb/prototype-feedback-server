@@ -67,6 +67,8 @@
     <textarea id="np-desc" rows="3" placeholder="Focus on the metrics section and cohort filter UX."></textarea>
     <label style="margin-top:8px">Target URL</label>
     <input type="text" id="np-url" placeholder="https://staging.app.com/dashboard" />
+    <label for="new-drive-folder" style="margin-top:8px;">Google Drive folder URL <small style="color:#94a3b8">(optional — for reviewer uploads)</small></label>
+    <input id="new-drive-folder" name="drive_folder_id" type="text" placeholder="https://drive.google.com/drive/folders/..." />
     <div class="row" style="margin-top:10px;justify-content:flex-end;gap:8px;display:flex">
       <button class="btn" id="np-cancel">Cancel</button>
       <button class="btn primary" id="np-save">Create</button>
@@ -79,10 +81,14 @@ const $ = (id) => document.getElementById(id);
 $('btn-new').onclick = () => $('modal-new').classList.add('open');
 $('np-cancel').onclick = () => $('modal-new').classList.remove('open');
 $('np-save').onclick = async () => {
+  const driveInput = document.getElementById('new-drive-folder').value.trim();
+  const folderMatch = driveInput.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  const driveFolderId = folderMatch ? folderMatch[1] : (driveInput || null);
   const body = {
     name: $('np-name').value.trim(),
     description: $('np-desc').value.trim(),
-    target_url: $('np-url').value.trim()
+    target_url: $('np-url').value.trim(),
+    drive_folder_id: driveFolderId
   };
   if (!body.name) { alert('Name required'); return; }
   const r = await fetch('/api/projects', {
