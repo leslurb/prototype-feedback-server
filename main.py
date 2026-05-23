@@ -174,6 +174,8 @@ def init_db() -> None:
             c.execute("CREATE INDEX IF NOT EXISTS idx_comments_reviewer_email ON comments(reviewer_email)")
         if not _column_exists(c, "comments", "viewport_path"):
             c.execute("ALTER TABLE comments ADD COLUMN viewport_path TEXT")
+        if not _column_exists(c, "projects", "drive_folder_id"):
+            c.execute("ALTER TABLE projects ADD COLUMN drive_folder_id TEXT")
 
 
 init_db()
@@ -895,7 +897,7 @@ def api_projects_list():
     """Used by the extension popup."""
     with db() as c:
         rows = c.execute(
-            """SELECT id, name, description, target_url, owner_email, owner_name
+            """SELECT id, name, description, target_url, owner_email, owner_name, drive_folder_id
                FROM projects WHERE archived = 0 ORDER BY updated_at DESC"""
         ).fetchall()
     return [dict(r) for r in rows]
@@ -912,14 +914,15 @@ async def api_projects_create(request: Request):
     with db() as c:
         c.execute(
             """INSERT INTO projects (id, created_at, updated_at, name, description,
-                                     target_url, owner_email, owner_name)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                                     target_url, owner_email, owner_name, drive_folder_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 pid, now, now, name,
                 body.get("description"),
                 body.get("target_url"),
                 body.get("owner_email"),
                 body.get("owner_name"),
+                body.get("drive_folder_id"),
             ),
         )
     return {"id": pid}
@@ -929,7 +932,7 @@ async def api_projects_create(request: Request):
 async def api_projects_update(pid: str, request: Request):
     body = await request.json()
     fields = {}
-    for f in ("name", "description", "target_url", "owner_email", "owner_name"):
+    for f in ("name", "description", "target_url", "owner_email", "owner_name", "drive_folder_id"):
         if f in body:
             fields[f] = body[f]
     if not fields:
