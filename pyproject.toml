@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prototype-feedback-server"
-version = "0.1.0"
+version = "0.3.0"
 description = "Local ingest + browse server for Prototype Feedback browser-extension exports."
 readme = "README.md"
 requires-python = ">=3.10"

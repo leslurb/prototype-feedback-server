@@ -9,6 +9,14 @@ Runs entirely on `localhost`. No accounts, no servers to pay for, no
 analytics. Optional Google Workspace integration uses your own Google account
 via OAuth (Gmail invites + People-API directory autocomplete).
 
+## Download
+
+Pre-built executables for Windows, macOS, and Linux are available on the
+[Releases](https://github.com/leslurb/prototype-feedback-server/releases) page.
+No Python installation required — download, run, and open http://127.0.0.1:8090.
+
+For development or customization, see the setup instructions below.
+
 ## What you get
 
 - **Drag-drop ingest** — drop the JSON file a reviewer sent you onto the
