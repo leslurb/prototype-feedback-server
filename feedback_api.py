@@ -103,8 +103,15 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
                 elif resolve_for_comment(c, row) is None:
                     skipped.append({"id": row["id"], "reason": "no repo mapped"})
                 else:
-                    change_status(c, row["id"], StatusChange(to="queued", expected_from="new", actor=fs.USER))
-                    queued.append(row["id"])
+                    try:
+                        change_status(c, row["id"], StatusChange(to="queued", expected_from="new", actor=fs.USER))
+                        queued.append(row["id"])
+                    except HTTPException as e:
+                        skipped.append({"id": row["id"], "reason": f"changed concurrently: {e.detail}"})
+            found_ids = {row["id"] for row in rows}
+            for cid in req.comment_ids:
+                if cid not in found_ids:
+                    skipped.append({"id": cid, "reason": "not found"})
         return {"queued": queued, "skipped": skipped}
 
     router.change_status = change_status  # reused by later endpoints in this module
