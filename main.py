@@ -968,9 +968,12 @@ async def api_projects_create(request: Request):
 async def api_projects_update(pid: str, request: Request):
     body = await request.json()
     fields = {}
-    for f in ("name", "description", "target_url", "owner_email", "owner_name", "drive_folder_id"):
+    for f in ("name", "description", "target_url", "owner_email", "owner_name", "drive_folder_id",
+              "repo", "local_path", "preview_cmd", "preview_url"):
         if f in body:
             fields[f] = body[f]
+    if "url_prefixes" in body:
+        fields["url_prefixes_json"] = json.dumps(body["url_prefixes"] or [])
     if not fields:
         return {"ok": True}
     fields["updated_at"] = now_iso()

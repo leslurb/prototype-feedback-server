@@ -44,6 +44,21 @@ class QueueRequest(BaseModel):
     project_ids: list[str] = []
 
 
+class DirectIssue(BaseModel):
+    title: str
+    page: str
+    recipient: str = "llm"
+    details: Optional[str] = None
+    viewport_w: Optional[int] = None
+    expected_result: Optional[str] = None
+    pin_comment_id: Optional[str] = None
+    queue: bool = False
+
+
+class RoundMark(BaseModel):
+    what: str  # shipped | rereview_sent
+
+
 def load_project(c, pid: Optional[str]) -> Optional[dict]:
     if not pid:
         return None
@@ -199,6 +214,65 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
                 (cutoff,),
             ).fetchall()
         return {"stale": [dict(r) for r in rows]}
+
+    @router.post("/api/projects/{pid}/issues")
+    def api_direct_issue(pid: str, body: DirectIssue):
+        if not body.title.strip() or not body.page.strip():
+            raise HTTPException(422, "title and page are required")
+        if body.recipient not in ("llm", "human"):
+            raise HTTPException(422, "recipient must be llm or human")
+        with db() as c:
+            project = load_project(c, pid)
+            if project is None:
+                raise HTTPException(404, f"project {pid} not found")
+            if body.queue:
+                if body.recipient != "llm":
+                    raise HTTPException(422, "human issues are never queued")
+                if not (body.expected_result or "").strip():
+                    raise HTTPException(422, "expected_result is required to queue")
+                if fs.resolve_repo(project, body.page, None) is None:
+                    raise HTTPException(422, "project has no repo mapped")
+            b = c.execute("SELECT id FROM batches WHERE project = ? AND kind = 'direct'", (pid,)).fetchone()
+            if b is None:
+                bid = str(uuid.uuid4())
+                c.execute("""INSERT INTO batches (id, ingested_at, reviewer, project, kind, comment_count)
+                             VALUES (?, ?, 'You', ?, 'direct', 0)""", (bid, now_iso(), pid))
+            else:
+                bid = b["id"]
+            pin = None
+            if body.pin_comment_id:
+                pin = c.execute("SELECT selector, bbox_json, screenshot_path FROM comments WHERE id = ?",
+                                (body.pin_comment_id,)).fetchone()
+            cid = str(uuid.uuid4())
+            text = body.title if not body.details else f"{body.title}\n\n{body.details}"
+            c.execute(
+                """INSERT INTO comments (id, batch_id, created_at, page_url, comment, reviewer, project, project_id,
+                                         recipient, viewport_w, expected_result, selector, bbox_json, screenshot_path)
+                   VALUES (?, ?, ?, ?, ?, 'You', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (cid, bid, now_iso(), body.page, text, project["name"], pid, body.recipient, body.viewport_w,
+                 body.expected_result, pin["selector"] if pin else None,
+                 pin["bbox_json"] if pin else "{}", pin["screenshot_path"] if pin else None),
+            )
+            c.execute("UPDATE batches SET comment_count = comment_count + 1 WHERE id = ?", (bid,))
+            status = "new"
+            if body.queue:
+                change_status(c, cid, StatusChange(to="queued", expected_from="new", actor=fs.USER))
+                status = "queued"
+        return {"id": cid, "batch_id": bid, "status": status}
+
+    @router.post("/api/rounds/{bid}/mark")
+    def api_round_mark(bid: str, body: RoundMark):
+        col = {"shipped": "shipped_at", "rereview_sent": "rereview_sent_at"}.get(body.what)
+        if col is None:
+            raise HTTPException(422, "what must be shipped or rereview_sent")
+        with db() as c:
+            counts = {r["status"]: r["n"] for r in c.execute(
+                "SELECT status, COUNT(*) AS n FROM comments WHERE batch_id = ? AND recipient = 'llm' GROUP BY status",
+                (bid,))}
+            if not fs.can_ship(counts):
+                raise HTTPException(409, {"error": "round not finished", "counts": counts})
+            c.execute(f"UPDATE batches SET {col} = ? WHERE id = ?", (now_iso(), bid))
+        return {"ok": True}
 
     router.change_status = change_status  # reused by later endpoints in this module
     return router
