@@ -48,3 +48,29 @@ def test_overview_rounds_states_trend_and_needs_you(client):
     ny = ov["needs_you"]
     assert (ny["blocked"], ny["to_confirm"], ny["human_open"]) == (1, 1, 1)
     assert ny["unmapped_projects"] == [{"project_id": "p2", "name": "sunsip", "waiting": 1}]
+
+
+def test_overview_scopes_a_split_batch_to_each_project(client):
+    # A batch with no project_id can be reached by two different projects (each via its own
+    # comment's project_id). Each project must see only its own comments in that round --
+    # not the other project's, and not double-counted in needs_you.
+    with main.db() as c:
+        c.execute("INSERT INTO projects (id, created_at, updated_at, name, repo) VALUES ('p1','t','t','P1','r/a')")
+        c.execute("INSERT INTO projects (id, created_at, updated_at, name, repo) VALUES ('p2','t','t','P2','r/b')")
+        c.execute("INSERT INTO batches (id, ingested_at, reviewer, project, project_id, kind) "
+                  "VALUES ('split','2026-09-15','Cailyn','some label',NULL,'export')")
+        c.executemany(
+            "INSERT INTO comments (id, batch_id, status, recipient, project_id, page_url) VALUES (?,?,?,?,?,'/')",
+            [("a1", "split", "blocked", "llm", "p1"), ("b1", "split", "verified", "llm", "p2")],
+        )
+    ov = client.get("/api/overview").json()
+    projects = {p["name"]: p for p in ov["projects"]}
+    p1_round = {r["id"]: r for r in projects["P1"]["rounds"]}["split"]
+    p2_round = {r["id"]: r for r in projects["P2"]["rounds"]}["split"]
+    assert p1_round["counts"] == {"blocked": 1}
+    assert p1_round["state"] == "Blocked"
+    assert p2_round["counts"] == {"verified": 1}
+    assert p2_round["state"] == "To confirm"
+    ny = ov["needs_you"]
+    assert ny["blocked"] == 1
+    assert ny["to_confirm"] == 1

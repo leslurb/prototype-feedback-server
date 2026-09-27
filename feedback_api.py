@@ -294,7 +294,10 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
                     {"pid": p["id"]}).fetchall()
                 rounds, trend, waiting_unmapped = [], [], 0
                 for b in batches:
-                    rows = c.execute("SELECT * FROM comments WHERE batch_id = ?", (b["id"],)).fetchall()
+                    rows = c.execute(
+                        """SELECT * FROM comments
+                           WHERE batch_id = ? AND (project_id = ? OR (project_id IS NULL AND ? = ?))""",
+                        (b["id"], p["id"], b["project_id"], p["id"])).fetchall()
                     llm = [r for r in rows if r["recipient"] == "llm"]
                     counts: dict = {}
                     for r in llm:
