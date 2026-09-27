@@ -23,6 +23,7 @@ def test_transitions(frm, to, actor, ok):
 
 @pytest.mark.parametrize("counts,needs_repo,shipped,resent,expected", [
     ({"new": 7}, True, False, False, "Needs repo"),
+    ({}, False, False, False, "Human only"),
     ({"doing": 1, "queued": 2, "done": 3}, False, False, False, "Running"),
     ({"queued": 2}, False, False, False, "Queued"),
     ({"blocked": 1, "done": 4}, False, False, False, "Blocked"),

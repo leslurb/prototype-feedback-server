@@ -35,6 +35,12 @@ def test_unmapped_returns_none():
     assert resolve_repo(None, "https://a.dev/x", {}) is None
 
 
+def test_project_without_prefixes_trusts_any_url_and_hints_are_not_consulted():
+    proj = {"repo": "r/p", "local_path": None, "url_prefixes": [], "target_url": None}
+    hints = {"https://other.dev": {"repo": "r/hint"}}
+    assert resolve_repo(proj, "https://other.dev/x", hints)["repo"] == "r/p"
+
+
 def test_iou():
     assert iou({"x": 0, "y": 0, "w": 10, "h": 10}, {"x": 0, "y": 0, "w": 10, "h": 10}) == 1.0
     assert iou({"x": 0, "y": 0, "w": 10, "h": 10}, {"x": 20, "y": 20, "w": 5, "h": 5}) == 0.0

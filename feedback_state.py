@@ -38,6 +38,8 @@ def round_state(counts: dict, needs_repo: bool, shipped: bool, rereview_sent: bo
     n = lambda k: counts.get(k, 0)  # noqa: E731
     if needs_repo:
         return "Needs repo"
+    if not any(n(s) for s in STATUSES):
+        return "Human only"
     if n("doing"):
         return "Running"
     if n("queued"):
@@ -72,7 +74,9 @@ def normalize_path(u: Optional[str]) -> str:
 def resolve_repo(project: Optional[dict], page_url: Optional[str], batch_hints: Optional[dict]) -> Optional[dict]:
     """Project mapping first (owner-set, works for every reviewer); the reviewer's
     own repo_hints only as a fallback. A full URL outside the project's prefixes
-    is not trusted. A bare path (direct issue) always belongs to its project."""
+    is not trusted. A bare path (direct issue) always belongs to its project. With no
+    prefixes configured, the project's repo is trusted for any URL: the comment already
+    belongs to this project."""
     if project and project.get("repo"):
         prefixes = [p for p in (project.get("url_prefixes") or []) if p]
         if project.get("target_url"):
