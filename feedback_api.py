@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Callable, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -92,6 +92,9 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
         if body.to == "queued" and row["recipient"] != "llm":
             raise HTTPException(422, "human-recipient comments are never queued")
         extra = {k: getattr(body, k) for k in UPDATABLE if getattr(body, k) is not None}
+        if body.to in ("queued", "new"):  # back in the queue: the old run's claim no longer applies
+            for k in ("run_id", "lane", "commit_sha"):
+                extra.setdefault(k, None)
         sets = ", ".join(["status = ?", "status_note = ?", "updated_at = ?"] + [f"{k} = ?" for k in extra])
         cur = c.execute(
             f"UPDATE comments SET {sets} WHERE id = ? AND status = ?",
@@ -186,20 +189,26 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
                       (rid, now_iso(), now_iso(), body.cap))
         return {"id": rid}
 
+    def run_missing_or_ended(c, rid: str) -> HTTPException:
+        if c.execute("SELECT 1 FROM runs WHERE id = ?", (rid,)).fetchone() is None:
+            return HTTPException(404, f"run {rid} not found")
+        return HTTPException(409, f"run {rid} has already ended")
+
     @router.post("/api/runs/{rid}/heartbeat")
     def api_run_heartbeat(rid: str):
         with db() as c:
-            if c.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ?", (now_iso(), rid)).rowcount == 0:
-                raise HTTPException(404, f"run {rid} not found")
+            if c.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ? AND ended_at IS NULL",
+                         (now_iso(), rid)).rowcount == 0:
+                raise run_missing_or_ended(c, rid)
         return {"ok": True}
 
     @router.post("/api/runs/{rid}/end")
     def api_run_end(rid: str, body: RunEnd):
         with db() as c:
-            n = c.execute("UPDATE runs SET ended_at = ?, status = ?, summary = ? WHERE id = ?",
+            n = c.execute("UPDATE runs SET ended_at = ?, status = ?, summary = ? WHERE id = ? AND ended_at IS NULL",
                           (now_iso(), body.status, json.dumps(body.summary), rid)).rowcount
             if n == 0:
-                raise HTTPException(404, f"run {rid} not found")
+                raise run_missing_or_ended(c, rid)
         return {"ok": True}
 
     @router.get("/api/runs/latest")
@@ -214,7 +223,7 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
 
     @router.get("/api/stale")
     def api_stale(minutes: int = 30):
-        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+        cutoff = (datetime.fromisoformat(now_iso()) - timedelta(minutes=minutes)).isoformat()
         with db() as c:
             rows = c.execute(
                 """SELECT cm.id, cm.run_id, cm.lane, r.heartbeat_at, r.ended_at
@@ -241,7 +250,7 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
                 if not (body.expected_result or "").strip():
                     raise HTTPException(422, "expected_result is required to queue")
                 if fs.resolve_repo(project, body.page, None) is None:
-                    raise HTTPException(422, "project has no repo mapped")
+                    raise HTTPException(422, "no repo mapped for this page (map the project's repo, or check url_prefixes)")
             pin = None
             if body.pin_comment_id:
                 pin = c.execute("SELECT selector, bbox_json, screenshot_path, project_id FROM comments WHERE id = ?",

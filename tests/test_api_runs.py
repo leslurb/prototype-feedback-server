@@ -45,3 +45,15 @@ def test_stale_includes_doing_comment_whose_run_ended_recently(client):
         c.execute("INSERT INTO comments (id, batch_id, status, run_id) VALUES ('ended_doing','b1','doing','ended')")
     ids = [s["id"] for s in client.get("/api/stale?minutes=30").json()["stale"]]
     assert "ended_doing" in ids
+
+
+def test_heartbeat_and_end_on_an_ended_run_are_409(client):
+    rid = client.post("/api/runs", json={"cap": 3}).json()["id"]
+    assert client.post(f"/api/runs/{rid}/end", json={"status": "finished"}).status_code == 200
+    assert client.post(f"/api/runs/{rid}/heartbeat").status_code == 409
+    assert client.post(f"/api/runs/{rid}/end", json={"status": "failed"}).status_code == 409
+    assert client.get("/api/runs/latest").json()["status"] == "finished"
+
+
+def test_end_on_unknown_run_is_404(client):
+    assert client.post("/api/runs/nope/end", json={"status": "finished"}).status_code == 404
