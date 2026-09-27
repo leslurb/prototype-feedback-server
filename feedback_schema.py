@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS status_events (
 );
 CREATE INDEX IF NOT EXISTS idx_status_events_comment ON status_events(comment_id);
 CREATE INDEX IF NOT EXISTS idx_comments_status ON comments(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_batches_direct ON batches(project_id) WHERE kind = 'direct';
 """
 
 

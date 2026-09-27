@@ -379,7 +379,8 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
                     for r in c.execute(
                         """SELECT cm.id, cm.page_url, cm.selector, cm.bbox_json, b.shipped_at
                            FROM comments cm JOIN batches b ON b.id = cm.batch_id
-                           WHERE cm.project_id = ? AND cm.status = 'done'""",
+                           WHERE cm.project_id = ? AND cm.status = 'done'
+                           ORDER BY cm.updated_at DESC, cm.created_at DESC""",
                         (project_id,),
                     )
                 ]

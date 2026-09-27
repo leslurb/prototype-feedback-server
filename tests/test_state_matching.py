@@ -61,3 +61,22 @@ def test_classify_repeat_region_pins_use_overlap_and_ignore_other_pages():
     other_page = {"id": "p4", "page": "/x", "selector": None, "bbox": new["bbox"], "shipped": True}
     assert classify_repeat(new, [other_page]) is None
     assert classify_repeat(new, [near]) == ("p3", "regression")
+
+
+def test_project_prefix_match_respects_a_boundary():
+    proj = {"repo": "r/a", "url_prefixes": ["https://a.dev"], "target_url": None}
+    assert resolve_repo(proj, "https://a.dev.evil.tld/x", None) is None
+    assert resolve_repo(proj, "https://a.dev/x", None)["repo"] == "r/a"
+    assert resolve_repo(proj, "https://a.dev", None)["repo"] == "r/a"
+    assert resolve_repo(proj, "https://a.dev?q=1", None)["repo"] == "r/a"
+    assert resolve_repo(proj, "https://a.dev#top", None)["repo"] == "r/a"
+    slash = {"repo": "r/a", "url_prefixes": ["https://a.dev/app/"], "target_url": None}
+    assert resolve_repo(slash, "https://a.dev/app/page", None)["repo"] == "r/a"
+    assert resolve_repo(slash, "https://a.dev/apple", None) is None
+
+
+def test_reviewer_hint_prefix_match_respects_a_boundary():
+    hints = {"https://a.dev": {"repo": "r/hint"}}
+    assert resolve_repo(None, "https://a.dev.evil.tld/x", hints) is None
+    assert resolve_repo(None, "https://a.dev/x", hints)["repo"] == "r/hint"
+    assert resolve_repo(None, "https://a.dev", hints)["repo"] == "r/hint"

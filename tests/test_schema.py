@@ -28,3 +28,15 @@ def test_migration_is_idempotent_and_defaults_are_safe():
         row = c.execute("SELECT status, recipient FROM comments WHERE id='c1'").fetchone()
         kind = c.execute("SELECT kind FROM batches WHERE id='b1'").fetchone()["kind"]
     assert (row["status"], row["recipient"], kind) == ("new", "llm", "export")
+
+
+def test_only_one_direct_batch_per_project():
+    import sqlite3
+    import pytest
+    with main.db() as c:
+        c.execute("INSERT INTO batches (id, ingested_at, kind, project_id) VALUES ('d1','t','direct','p1')")
+        c.execute("INSERT INTO batches (id, ingested_at, kind, project_id) VALUES ('e1','t','export','p1')")
+        c.execute("INSERT INTO batches (id, ingested_at, kind, project_id) VALUES ('e2','t','export','p1')")
+    with pytest.raises(sqlite3.IntegrityError):
+        with main.db() as c:
+            c.execute("INSERT INTO batches (id, ingested_at, kind, project_id) VALUES ('d2','t','direct','p1')")

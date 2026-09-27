@@ -71,6 +71,12 @@ def normalize_path(u: Optional[str]) -> str:
     return "/" + path.strip("/")
 
 
+def prefix_matches(url: str, p: str) -> bool:
+    """A prefix matches only at a boundary, so "https://a.dev" never matches "https://a.dev.evil.tld"."""
+    return (url == p or (p.endswith("/") and url.startswith(p))
+            or any(url.startswith(p + sep) for sep in ("/", "?", "#")))
+
+
 def resolve_repo(project: Optional[dict], page_url: Optional[str], batch_hints: Optional[dict]) -> Optional[dict]:
     """Project mapping first (owner-set, works for every reviewer); the reviewer's
     own repo_hints only as a fallback. A full URL outside the project's prefixes
@@ -82,11 +88,11 @@ def resolve_repo(project: Optional[dict], page_url: Optional[str], batch_hints: 
         if project.get("target_url"):
             prefixes.append(project["target_url"])
         is_url = bool(page_url) and "://" in page_url
-        if not is_url or not prefixes or any(page_url.startswith(p) for p in prefixes):
+        if not is_url or not prefixes or any(prefix_matches(page_url, p) for p in prefixes):
             return {"repo": project["repo"], "local_path": project.get("local_path"), "source": "project"}
     best = None
     for prefix, info in (batch_hints or {}).items():
-        if page_url and page_url.startswith(prefix) and isinstance(info, dict) and info.get("repo"):
+        if page_url and prefix_matches(page_url, prefix) and isinstance(info, dict) and info.get("repo"):
             if best is None or len(prefix) > len(best[0]):
                 best = (prefix, info)
     if best:
