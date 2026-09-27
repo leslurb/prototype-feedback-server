@@ -25,3 +25,23 @@ def test_stale_doing_is_reported_when_run_heartbeat_is_old_or_run_ended(client):
 
 def test_heartbeat_on_unknown_run_is_404(client):
     assert client.post("/api/runs/nope/heartbeat").status_code == 404
+
+
+def test_run_end_rejects_unknown_status(client):
+    rid = client.post("/api/runs", json={"cap": 3}).json()["id"]
+    r = client.post(f"/api/runs/{rid}/end", json={"status": "banana"})
+    assert r.status_code == 422
+    latest = client.get("/api/runs/latest").json()
+    assert latest["status"] == "running"
+
+
+def test_stale_includes_doing_comment_whose_run_ended_recently(client):
+    with main.db() as c:
+        c.execute(
+            "INSERT INTO runs (id, started_at, heartbeat_at, ended_at, status) VALUES ('ended', ?, ?, ?, 'finished')",
+            (main.now_iso(), main.now_iso(), main.now_iso()),
+        )
+        c.execute("INSERT INTO batches (id, ingested_at) VALUES ('b1','t')")
+        c.execute("INSERT INTO comments (id, batch_id, status, run_id) VALUES ('ended_doing','b1','doing','ended')")
+    ids = [s["id"] for s in client.get("/api/stale?minutes=30").json()["stale"]]
+    assert "ended_doing" in ids

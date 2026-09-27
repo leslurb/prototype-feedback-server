@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -20,7 +20,7 @@ class RunStart(BaseModel):
 
 
 class RunEnd(BaseModel):
-    status: str  # finished | stopped | failed
+    status: Literal["finished", "stopped", "failed"]
     summary: dict = {}
 
 
