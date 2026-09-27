@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -12,6 +13,15 @@ from pydantic import BaseModel
 import feedback_state as fs
 
 UPDATABLE = ("run_id", "lane", "commit_sha", "verify_selector", "after_path", "verified_at", "verify_json")
+
+
+class RunStart(BaseModel):
+    cap: int
+
+
+class RunEnd(BaseModel):
+    status: str  # finished | stopped | failed
+    summary: dict = {}
 
 
 class StatusChange(BaseModel):
@@ -142,6 +152,53 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
                 "lanes": [{"page": pg, "comments": cms} for pg, cms in p["lanes"].items()]}
                for p in projects.values()]
         return {"projects": out, "total": sum(len(l["comments"]) for p in out for l in p["lanes"])}
+
+    @router.post("/api/runs")
+    def api_run_start(body: RunStart):
+        rid = str(uuid.uuid4())
+        with db() as c:
+            c.execute("INSERT INTO runs (id, started_at, heartbeat_at, cap, status) VALUES (?, ?, ?, ?, 'running')",
+                      (rid, now_iso(), now_iso(), body.cap))
+        return {"id": rid}
+
+    @router.post("/api/runs/{rid}/heartbeat")
+    def api_run_heartbeat(rid: str):
+        with db() as c:
+            if c.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ?", (now_iso(), rid)).rowcount == 0:
+                raise HTTPException(404, f"run {rid} not found")
+        return {"ok": True}
+
+    @router.post("/api/runs/{rid}/end")
+    def api_run_end(rid: str, body: RunEnd):
+        with db() as c:
+            n = c.execute("UPDATE runs SET ended_at = ?, status = ?, summary = ? WHERE id = ?",
+                          (now_iso(), body.status, json.dumps(body.summary), rid)).rowcount
+            if n == 0:
+                raise HTTPException(404, f"run {rid} not found")
+        return {"ok": True}
+
+    @router.get("/api/runs/latest")
+    def api_run_latest():
+        with db() as c:
+            r = c.execute("SELECT * FROM runs ORDER BY started_at DESC LIMIT 1").fetchone()
+        if r is None:
+            return None
+        d = dict(r)
+        d["summary"] = json.loads(d["summary"] or "{}")
+        return d
+
+    @router.get("/api/stale")
+    def api_stale(minutes: int = 30):
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+        with db() as c:
+            rows = c.execute(
+                """SELECT cm.id, cm.run_id, cm.lane, r.heartbeat_at, r.ended_at
+                   FROM comments cm LEFT JOIN runs r ON r.id = cm.run_id
+                   WHERE cm.status = 'doing'
+                     AND (r.id IS NULL OR r.ended_at IS NOT NULL OR r.heartbeat_at < ?)""",
+                (cutoff,),
+            ).fetchall()
+        return {"stale": [dict(r) for r in rows]}
 
     router.change_status = change_status  # reused by later endpoints in this module
     return router
