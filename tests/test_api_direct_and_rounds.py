@@ -91,3 +91,19 @@ def test_direct_batch_can_never_be_marked_as_a_round(client):
     assert "direct stream" in r.json()["detail"]
     with main.db() as c:
         assert c.execute("SELECT shipped_at FROM batches WHERE id='d1'").fetchone()[0] is None
+
+
+def test_url_prefixes_must_be_a_list_of_non_empty_strings(client):
+    _project()
+    with main.db() as c:
+        c.execute("""UPDATE projects SET url_prefixes_json='["https://a.dev"]' WHERE id='p1'""")
+    for bad in ("https://evil.dev", ["https://b.dev", ""], ["https://b.dev", 3], {"a": 1}):
+        r = client.post("/api/projects/p1", json={"url_prefixes": bad, "repo": "r/z"})
+        assert r.status_code == 422, bad
+    with main.db() as c:
+        p = c.execute("SELECT url_prefixes_json, repo FROM projects WHERE id='p1'").fetchone()
+    assert tuple(p) == ('["https://a.dev"]', "r/a")
+    assert client.post("/api/projects/p1", json={"url_prefixes": ["https://b.dev", "https://c.dev"]}).status_code == 200
+    with main.db() as c:
+        stored = c.execute("SELECT url_prefixes_json FROM projects WHERE id='p1'").fetchone()[0]
+    assert stored == '["https://b.dev", "https://c.dev"]'

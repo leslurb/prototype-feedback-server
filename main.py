@@ -973,7 +973,11 @@ async def api_projects_update(pid: str, request: Request):
         if f in body:
             fields[f] = body[f]
     if "url_prefixes" in body:
-        fields["url_prefixes_json"] = json.dumps(body["url_prefixes"] or [])
+        prefixes = body["url_prefixes"] or []
+        # A bare string would be iterated char by char by resolve_repo and disable the prefix gate.
+        if not isinstance(prefixes, list) or not all(isinstance(p, str) and p.strip() for p in prefixes):
+            raise HTTPException(422, "url_prefixes must be a list of non-empty strings")
+        fields["url_prefixes_json"] = json.dumps(prefixes)
     if not fields:
         return {"ok": True}
     fields["updated_at"] = now_iso()
