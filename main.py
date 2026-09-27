@@ -364,7 +364,11 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
                     project_id = hits[0]["project_id"]
 
             comment_project_ids.add(project_id)
-            recipient = cm.get("recipient_resolved") or "llm"
+            recipient = str(cm.get("recipient_resolved") or "llm").strip().lower()
+            if recipient not in ("llm", "human"):
+                print(f"warning: comment {cid}: unknown recipient_resolved "
+                      f"{cm.get('recipient_resolved')!r}, using 'llm'", file=sys.stderr)
+                recipient = "llm"
             viewport_w = (cm.get("viewport") or {}).get("w")
             repeat = None
             if project_id:

@@ -87,3 +87,22 @@ def test_ingest_leaves_batch_project_null_when_comments_span_projects():
     bid = main.ingest_payload(p, "x.json")
     with main.db() as c:
         assert c.execute("SELECT project_id FROM batches WHERE id=?", (bid,)).fetchone()[0] is None
+
+
+def test_recipient_is_normalised_case_and_whitespace():
+    _project()
+    p = _payload()
+    p["comments"][0]["recipient_resolved"] = " Human "
+    main.ingest_payload(p, "x.json")
+    with main.db() as c:
+        assert c.execute("SELECT recipient FROM comments WHERE id='c-new'").fetchone()[0] == "human"
+
+
+def test_unknown_recipient_falls_back_to_llm_with_a_warning(capsys):
+    _project()
+    p = _payload()
+    p["comments"][0]["recipient_resolved"] = "banana"
+    main.ingest_payload(p, "x.json")
+    with main.db() as c:
+        assert c.execute("SELECT recipient FROM comments WHERE id='c-new'").fetchone()[0] == "llm"
+    assert "banana" in capsys.readouterr().err
