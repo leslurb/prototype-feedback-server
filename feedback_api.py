@@ -273,8 +273,11 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
         if col is None:
             raise HTTPException(422, "what must be shipped or rereview_sent")
         with db() as c:
-            if c.execute("SELECT 1 FROM batches WHERE id = ?", (bid,)).fetchone() is None:
+            b = c.execute("SELECT kind FROM batches WHERE id = ?", (bid,)).fetchone()
+            if b is None:
                 raise HTTPException(404, f"round {bid} not found")
+            if b["kind"] == "direct":
+                raise HTTPException(422, "the direct stream is never shipped as a round")
             counts = {r["status"]: r["n"] for r in c.execute(
                 "SELECT status, COUNT(*) AS n FROM comments WHERE batch_id = ? AND recipient = 'llm' GROUP BY status",
                 (bid,))}

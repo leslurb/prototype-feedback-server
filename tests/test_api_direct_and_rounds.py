@@ -80,3 +80,14 @@ def test_ship_is_gated_on_every_llm_item_done_or_skipped(client):
     assert client.post("/api/rounds/b1/mark", json={"what": "shipped"}).status_code == 200
     with main.db() as c:
         assert c.execute("SELECT shipped_at FROM batches WHERE id='b1'").fetchone()[0]
+
+
+def test_direct_batch_can_never_be_marked_as_a_round(client):
+    with main.db() as c:
+        c.execute("INSERT INTO batches (id, ingested_at, kind) VALUES ('d1','t','direct')")
+        c.execute("INSERT INTO comments (id, batch_id, status, recipient) VALUES ('c1','d1','done','llm')")
+    r = client.post("/api/rounds/d1/mark", json={"what": "shipped"})
+    assert r.status_code == 422
+    assert "direct stream" in r.json()["detail"]
+    with main.db() as c:
+        assert c.execute("SELECT shipped_at FROM batches WHERE id='d1'").fetchone()[0] is None
