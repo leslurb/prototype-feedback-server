@@ -146,6 +146,7 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
     @router.get("/api/queue")
     def api_queue():
         projects: dict = {}
+        unqueued: list = []
         with db() as c:
             rows = c.execute(
                 "SELECT * FROM comments WHERE status = 'queued' ORDER BY created_at, id"
@@ -153,8 +154,12 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
             for row in rows:
                 repo = resolve_for_comment(c, row)
                 if repo is None:  # mapping removed after queueing: surface it, never drop silently
-                    change_status(c, row["id"], StatusChange(
-                        to="new", expected_from="queued", actor=fs.USER, note="unqueued: no repo mapped"))
+                    try:
+                        change_status(c, row["id"], StatusChange(
+                            to="new", expected_from="queued", actor=fs.USER, note="unqueued: no repo mapped"))
+                        unqueued.append({"id": row["id"], "reason": "no repo mapped"})
+                    except HTTPException as e:  # a concurrent change must not abort the read
+                        unqueued.append({"id": row["id"], "reason": f"changed concurrently: {e.detail}"})
                     continue
                 key = (row["project_id"], repo["repo"])
                 proj = projects.setdefault(key, {
@@ -170,7 +175,8 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
         out = [{**{k: v for k, v in p.items() if k != "lanes"},
                 "lanes": [{"page": pg, "comments": cms} for pg, cms in p["lanes"].items()]}
                for p in projects.values()]
-        return {"projects": out, "total": sum(len(l["comments"]) for p in out for l in p["lanes"])}
+        return {"projects": out, "total": sum(len(l["comments"]) for p in out for l in p["lanes"]),
+                "unqueued": unqueued}
 
     @router.post("/api/runs")
     def api_run_start(body: RunStart):

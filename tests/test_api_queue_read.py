@@ -21,7 +21,7 @@ def test_queue_groups_by_project_then_page_lane(client):
 
 def test_queue_is_empty_list_not_error_when_nothing_queued(client):
     body = client.get("/api/queue").json()
-    assert body == {"projects": [], "total": 0}
+    assert body == {"projects": [], "total": 0, "unqueued": []}
 
 
 def test_queued_comment_with_no_repo_is_unqueued_visibly(client):
@@ -41,6 +41,7 @@ def test_queued_comment_with_no_repo_is_unqueued_visibly(client):
     assert "lost" not in ids
     assert ids == ["ok1"]
     assert body["total"] == 1
+    assert body["unqueued"] == [{"id": "lost", "reason": "no repo mapped"}]
     with main.db() as c:
         row = c.execute("SELECT status FROM comments WHERE id = 'lost'").fetchone()
         assert row["status"] == "new"
@@ -49,3 +50,29 @@ def test_queued_comment_with_no_repo_is_unqueued_visibly(client):
         ).fetchone()
         assert (ev["from_status"], ev["to_status"], ev["actor"], ev["note"]) == (
             "queued", "new", "user", "unqueued: no repo mapped")
+
+
+def test_unqueue_race_does_not_abort_the_read_or_roll_back_other_unqueues(client):
+    with main.db() as c:
+        c.execute("INSERT INTO projects (id, created_at, updated_at, name) VALUES ('p2','t','t','no-repo')")
+        c.execute("INSERT INTO projects (id, created_at, updated_at, name, repo) VALUES ('p3','t','t','ok','r/a')")
+        c.execute("INSERT INTO batches (id, ingested_at) VALUES ('b1','t')")
+        rows = [("raced", "p2", "2026-01-01"), ("lost", "p2", "2026-01-02"), ("ok1", "p3", "2026-01-03")]
+        c.executemany("""INSERT INTO comments (id, batch_id, page_url, status, recipient, project_id, created_at)
+                         VALUES (?, 'b1', 'https://x.dev/', 'queued', 'llm', ?, ?)""", rows)
+        c.execute("CREATE TRIGGER t_race BEFORE UPDATE OF status ON comments WHEN NEW.id = 'raced' "
+                  "BEGIN SELECT RAISE(IGNORE); END")
+    try:
+        r = client.get("/api/queue")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert [cm["id"] for p in body["projects"] for lane in p["lanes"] for cm in lane["comments"]] == ["ok1"]
+        reasons = {u["id"]: u["reason"] for u in body["unqueued"]}
+        assert set(reasons) == {"raced", "lost"}
+        assert reasons["raced"].startswith("changed concurrently: ")
+        assert reasons["lost"] == "no repo mapped"
+        with main.db() as c:
+            assert c.execute("SELECT status FROM comments WHERE id = 'lost'").fetchone()[0] == "new"
+    finally:
+        with main.db() as c:
+            c.execute("DROP TRIGGER t_race")
