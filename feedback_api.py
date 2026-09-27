@@ -280,5 +280,52 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
             c.execute(f"UPDATE batches SET {col} = ? WHERE id = ?", (now_iso(), bid))
         return {"ok": True}
 
+    @router.get("/api/overview")
+    def api_overview():
+        out, needs = [], {"blocked": 0, "to_confirm": 0, "human_open": 0, "unmapped_projects": []}
+        with db() as c:
+            for p in c.execute("SELECT * FROM projects WHERE archived = 0 ORDER BY name"):
+                project = load_project(c, p["id"])
+                batches = c.execute(
+                    """SELECT * FROM batches b
+                       WHERE b.project_id = :pid
+                          OR EXISTS (SELECT 1 FROM comments cm WHERE cm.batch_id = b.id AND cm.project_id = :pid)
+                       ORDER BY CASE b.kind WHEN 'direct' THEN 0 ELSE 1 END, b.ingested_at DESC""",
+                    {"pid": p["id"]}).fetchall()
+                rounds, trend, waiting_unmapped = [], [], 0
+                for b in batches:
+                    rows = c.execute("SELECT * FROM comments WHERE batch_id = ?", (b["id"],)).fetchall()
+                    llm = [r for r in rows if r["recipient"] == "llm"]
+                    counts: dict = {}
+                    for r in llm:
+                        counts[r["status"]] = counts.get(r["status"], 0) + 1
+                    hints = json.loads(b["repo_hints_json"] or "{}")
+                    unmapped_new = sum(1 for r in llm if r["status"] == "new"
+                                       and fs.resolve_repo(project, r["page_url"], hints) is None)
+                    waiting_unmapped += unmapped_new
+                    human_open = sum(1 for r in rows if r["recipient"] == "human" and r["status"] not in ("done", "skipped"))
+                    rounds.append({
+                        "id": b["id"], "kind": b["kind"], "reviewer": b["reviewer"], "ingested_at": b["ingested_at"],
+                        "counts": counts, "human_open": human_open,
+                        "state": fs.round_state(counts, unmapped_new > 0, bool(b["shipped_at"]), bool(b["rereview_sent_at"])),
+                        "repeats": sum(1 for r in rows if r["repeat_kind"]),
+                    })
+                    if b["kind"] == "export":
+                        trend.append(len(rows))
+                    needs["blocked"] += counts.get("blocked", 0)
+                    needs["to_confirm"] += counts.get("verified", 0)
+                    needs["human_open"] += human_open
+                if waiting_unmapped:
+                    needs["unmapped_projects"].append({"project_id": p["id"], "name": p["name"], "waiting": waiting_unmapped})
+                out.append({"id": p["id"], "name": p["name"], "repo": p["repo"], "rounds": rounds,
+                            "trend": list(reversed(trend))})
+        latest = None
+        with db() as c:
+            run = c.execute("SELECT * FROM runs ORDER BY started_at DESC LIMIT 1").fetchone()
+        if run is not None:
+            latest = dict(run)
+            latest["summary"] = json.loads(latest["summary"] or "{}")
+        return {"projects": out, "needs_you": needs, "last_run": latest}
+
     router.change_status = change_status  # reused by later endpoints in this module
     return router
