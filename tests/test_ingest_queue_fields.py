@@ -35,10 +35,10 @@ def test_ingest_stores_recipient_hints_and_viewport():
     assert b["kind"] == "export"
 
 
-def test_missing_recipient_defaults_to_llm_like_the_extension():
+def test_empty_recipient_falls_back_to_llm_like_the_extension():
     _project()
     p = _payload()
-    del p["comments"][0]["recipient_resolved"]
+    p["comments"][0]["recipient_resolved"] = ""
     main.ingest_payload(p, "x.json")
     with main.db() as c:
         assert c.execute("SELECT recipient FROM comments WHERE id='c-new'").fetchone()[0] == "llm"
