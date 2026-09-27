@@ -43,3 +43,21 @@ def test_human_recipient_cannot_be_queued(client):
 def test_unknown_comment_is_404(client):
     r = client.post("/api/comment/nope/status", json={"to": "queued", "expected_from": "new", "actor": "user"})
     assert r.status_code == 404
+
+
+def test_human_comment_can_go_new_to_done_with_event(client):
+    _comment("new", recipient="human")
+    r = client.post("/api/comment/c1/status", json={"to": "done", "expected_from": "new", "actor": "user"})
+    assert r.status_code == 200, r.text
+    with main.db() as c:
+        assert c.execute("SELECT status FROM comments WHERE id='c1'").fetchone()[0] == "done"
+        ev = c.execute("SELECT from_status, to_status, actor FROM status_events WHERE comment_id='c1'").fetchone()
+    assert tuple(ev) == ("new", "done", "user")
+
+
+def test_llm_comment_new_to_done_is_still_422(client):
+    _comment("new", recipient="llm")
+    r = client.post("/api/comment/c1/status", json={"to": "done", "expected_from": "new", "actor": "user"})
+    assert r.status_code == 422
+    with main.db() as c:
+        assert c.execute("SELECT status FROM comments WHERE id='c1'").fetchone()[0] == "new"

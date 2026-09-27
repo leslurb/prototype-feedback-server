@@ -83,7 +83,10 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
         row = c.execute("SELECT status, recipient FROM comments WHERE id = ?", (cid,)).fetchone()
         if row is None:
             raise HTTPException(404, f"comment {cid} not found")
-        if body.to not in fs.STATUSES or not fs.can_transition(body.expected_from, body.to, body.actor):
+        # A human-recipient comment has no "handled" state: the user closes it straight from new.
+        human_close = (body.expected_from, body.to, body.actor) == ("new", "done", fs.USER) \
+            and row["recipient"] == "human"
+        if body.to not in fs.STATUSES or not (human_close or fs.can_transition(body.expected_from, body.to, body.actor)):
             raise HTTPException(422, f"{body.actor} may not move {body.expected_from} -> {body.to}")
         if body.to == "queued" and row["recipient"] != "llm":
             raise HTTPException(422, "human-recipient comments are never queued")
