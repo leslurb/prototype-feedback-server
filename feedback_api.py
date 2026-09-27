@@ -114,5 +114,34 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
                     skipped.append({"id": cid, "reason": "not found"})
         return {"queued": queued, "skipped": skipped}
 
+    @router.get("/api/queue")
+    def api_queue():
+        projects: dict = {}
+        with db() as c:
+            rows = c.execute(
+                "SELECT * FROM comments WHERE status = 'queued' ORDER BY created_at, id"
+            ).fetchall()
+            for row in rows:
+                repo = resolve_for_comment(c, row)
+                if repo is None:  # mapping removed after queueing: surface it, never drop silently
+                    change_status(c, row["id"], StatusChange(
+                        to="new", expected_from="queued", actor=fs.USER, note="unqueued: no repo mapped"))
+                    continue
+                key = (row["project_id"], repo["repo"])
+                proj = projects.setdefault(key, {
+                    "project_id": row["project_id"], "repo": repo["repo"], "local_path": repo["local_path"],
+                    "repo_source": repo["source"], "lanes": {}})
+                page = fs.normalize_path(row["page_url"])
+                proj["lanes"].setdefault(page, []).append({
+                    "id": row["id"], "batch_id": row["batch_id"], "page_url": row["page_url"],
+                    "selector": row["selector"], "viewport_w": row["viewport_w"],
+                    "comment": row["comment"], "expected_result": row["expected_result"],
+                    "screenshot_path": row["screenshot_path"], "repeat_of": row["repeat_of"],
+                    "repeat_kind": row["repeat_kind"]})
+        out = [{**{k: v for k, v in p.items() if k != "lanes"},
+                "lanes": [{"page": pg, "comments": cms} for pg, cms in p["lanes"].items()]}
+               for p in projects.values()]
+        return {"projects": out, "total": sum(len(l["comments"]) for p in out for l in p["lanes"])}
+
     router.change_status = change_status  # reused by later endpoints in this module
     return router
