@@ -27,6 +27,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import feedback_schema
+
 def _get_bundle_dir():
     if getattr(sys, 'frozen', False):
         return Path(sys._MEIPASS)
@@ -180,6 +182,7 @@ def init_db() -> None:
             c.execute("ALTER TABLE comments ADD COLUMN viewport_path TEXT")
         if not _column_exists(c, "projects", "drive_folder_id"):
             c.execute("ALTER TABLE projects ADD COLUMN drive_folder_id TEXT")
+        feedback_schema.migrate(c)
 
 
 init_db()
