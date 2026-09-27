@@ -28,6 +28,29 @@ class StatusChange(BaseModel):
     verify_json: Optional[str] = None
 
 
+class QueueRequest(BaseModel):
+    comment_ids: list[str] = []
+    batch_ids: list[str] = []
+    project_ids: list[str] = []
+
+
+def load_project(c, pid: Optional[str]) -> Optional[dict]:
+    if not pid:
+        return None
+    p = c.execute("SELECT * FROM projects WHERE id = ?", (pid,)).fetchone()
+    if p is None:
+        return None
+    d = dict(p)
+    d["url_prefixes"] = json.loads(d.get("url_prefixes_json") or "[]")
+    return d
+
+
+def resolve_for_comment(c, row) -> Optional[dict]:
+    b = c.execute("SELECT repo_hints_json FROM batches WHERE id = ?", (row["batch_id"],)).fetchone()
+    hints = json.loads((b["repo_hints_json"] if b else None) or "{}")
+    return fs.resolve_repo(load_project(c, row["project_id"]), row["page_url"], hints)
+
+
 def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
     router = APIRouter()
 
@@ -59,6 +82,30 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
     def api_comment_status(cid: str, body: StatusChange):
         with db() as c:
             return change_status(c, cid, body)
+
+    @router.post("/api/comments/queue")
+    def api_bulk_queue(req: QueueRequest):
+        queued, skipped = [], []
+        with db() as c:
+            rows = c.execute(
+                f"""SELECT * FROM comments
+                    WHERE id IN ({','.join('?' * len(req.comment_ids)) or "''"})
+                       OR batch_id IN ({','.join('?' * len(req.batch_ids)) or "''"})
+                       OR project_id IN ({','.join('?' * len(req.project_ids)) or "''"})
+                    ORDER BY created_at, id""",
+                (*req.comment_ids, *req.batch_ids, *req.project_ids),
+            ).fetchall()
+            for row in rows:
+                if row["status"] != "new":
+                    skipped.append({"id": row["id"], "reason": f"status {row['status']}"})
+                elif row["recipient"] != "llm":
+                    skipped.append({"id": row["id"], "reason": "human recipient"})
+                elif resolve_for_comment(c, row) is None:
+                    skipped.append({"id": row["id"], "reason": "no repo mapped"})
+                else:
+                    change_status(c, row["id"], StatusChange(to="queued", expected_from="new", actor=fs.USER))
+                    queued.append(row["id"])
+        return {"queued": queued, "skipped": skipped}
 
     router.change_status = change_status  # reused by later endpoints in this module
     return router
