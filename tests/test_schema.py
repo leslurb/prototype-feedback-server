@@ -3,7 +3,7 @@ import main
 COMMENT_COLS = {"status", "recipient", "expected_result", "verify_selector", "viewport_w",
                 "lane", "run_id", "commit_sha", "after_path", "verified_at", "verify_json",
                 "repeat_of", "repeat_kind", "status_note", "updated_at"}
-BATCH_COLS = {"kind", "repo_hints_json", "shipped_at", "rereview_sent_at"}
+BATCH_COLS = {"kind", "repo_hints_json", "shipped_at", "rereview_sent_at", "project_id"}
 PROJECT_COLS = {"repo", "local_path", "url_prefixes_json", "preview_cmd", "preview_url"}
 
 

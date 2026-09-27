@@ -1,9 +1,10 @@
 import main
 
 
-def _project(repo="r/a"):
+def _project(pid="p1", repo="r/a", name="P"):
     with main.db() as c:
-        c.execute("INSERT INTO projects (id, created_at, updated_at, name, repo) VALUES ('p1','t','t','P',?)", (repo,))
+        c.execute("INSERT INTO projects (id, created_at, updated_at, name, repo) VALUES (?,'t','t',?,?)",
+                  (pid, name, repo))
 
 
 def test_direct_issue_goes_to_one_direct_batch_per_project(client):
@@ -14,7 +15,35 @@ def test_direct_issue_goes_to_one_direct_batch_per_project(client):
     b = client.post("/api/projects/p1/issues", json=body).json()
     assert a["batch_id"] == b["batch_id"] and a["status"] == "new"
     with main.db() as c:
-        assert tuple(c.execute("SELECT kind, reviewer FROM batches WHERE id=?", (a["batch_id"],)).fetchone()) == ("direct", "You")
+        row = c.execute("SELECT kind, reviewer, project, project_id FROM batches WHERE id=?",
+                         (a["batch_id"],)).fetchone()
+    assert tuple(row) == ("direct", "You", "P", "p1")
+
+
+def test_unknown_pin_is_404(client):
+    _project()
+    body = {"title": "x", "page": "/", "recipient": "llm", "pin_comment_id": "nope"}
+    r = client.post("/api/projects/p1/issues", json=body)
+    assert r.status_code == 404
+    with main.db() as c:
+        assert c.execute("SELECT COUNT(*) FROM batches WHERE kind='direct'").fetchone()[0] == 0
+
+
+def test_pin_from_another_project_is_422(client):
+    _project()
+    _project(pid="p2", name="Q")
+    with main.db() as c:
+        c.execute("INSERT INTO batches (id, ingested_at, project_id) VALUES ('b2','t','p2')")
+        c.execute("INSERT INTO comments (id, batch_id, project_id) VALUES ('c9','b2','p2')")
+    body = {"title": "x", "page": "/", "recipient": "llm", "pin_comment_id": "c9"}
+    r = client.post("/api/projects/p1/issues", json=body)
+    assert r.status_code == 422
+    with main.db() as c:
+        assert c.execute("SELECT COUNT(*) FROM batches WHERE kind='direct'").fetchone()[0] == 0
+
+
+def test_mark_unknown_round_is_404(client):
+    assert client.post("/api/rounds/nope/mark", json={"what": "shipped"}).status_code == 404
 
 
 def test_save_and_queue_requires_ready(client):

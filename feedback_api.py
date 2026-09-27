@@ -232,17 +232,21 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
                     raise HTTPException(422, "expected_result is required to queue")
                 if fs.resolve_repo(project, body.page, None) is None:
                     raise HTTPException(422, "project has no repo mapped")
-            b = c.execute("SELECT id FROM batches WHERE project = ? AND kind = 'direct'", (pid,)).fetchone()
-            if b is None:
-                bid = str(uuid.uuid4())
-                c.execute("""INSERT INTO batches (id, ingested_at, reviewer, project, kind, comment_count)
-                             VALUES (?, ?, 'You', ?, 'direct', 0)""", (bid, now_iso(), pid))
-            else:
-                bid = b["id"]
             pin = None
             if body.pin_comment_id:
-                pin = c.execute("SELECT selector, bbox_json, screenshot_path FROM comments WHERE id = ?",
+                pin = c.execute("SELECT selector, bbox_json, screenshot_path, project_id FROM comments WHERE id = ?",
                                 (body.pin_comment_id,)).fetchone()
+                if pin is None:
+                    raise HTTPException(404, "pin comment not found")
+                if pin["project_id"] is not None and pin["project_id"] != pid:
+                    raise HTTPException(422, "pin belongs to another project")
+            b = c.execute("SELECT id FROM batches WHERE project_id = ? AND kind = 'direct'", (pid,)).fetchone()
+            if b is None:
+                bid = str(uuid.uuid4())
+                c.execute("""INSERT INTO batches (id, ingested_at, reviewer, project, project_id, kind, comment_count)
+                             VALUES (?, ?, 'You', ?, ?, 'direct', 0)""", (bid, now_iso(), project["name"], pid))
+            else:
+                bid = b["id"]
             cid = str(uuid.uuid4())
             text = body.title if not body.details else f"{body.title}\n\n{body.details}"
             c.execute(
@@ -266,6 +270,8 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
         if col is None:
             raise HTTPException(422, "what must be shipped or rereview_sent")
         with db() as c:
+            if c.execute("SELECT 1 FROM batches WHERE id = ?", (bid,)).fetchone() is None:
+                raise HTTPException(404, f"round {bid} not found")
             counts = {r["status"]: r["n"] for r in c.execute(
                 "SELECT status, COUNT(*) AS n FROM comments WHERE batch_id = ? AND recipient = 'llm' GROUP BY status",
                 (bid,))}

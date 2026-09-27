@@ -27,6 +27,7 @@ NEW_COLUMNS = {
         ("repo_hints_json", "TEXT"),
         ("shipped_at", "TEXT"),
         ("rereview_sent_at", "TEXT"),
+        ("project_id", "TEXT"),
     ],
     "projects": [
         ("repo", "TEXT"),
