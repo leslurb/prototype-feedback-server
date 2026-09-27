@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import feedback_schema
+import feedback_state
 
 def _get_bundle_dir():
     if getattr(sys, 'frozen', False):
@@ -294,8 +295,8 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
         c.execute(
             """INSERT INTO batches
                (id, ingested_at, schema_version, extension_version, exported_at,
-                reviewer, project, source_filename, comment_count)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                reviewer, project, source_filename, comment_count, repo_hints_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 batch_id,
                 now_iso(),
@@ -306,6 +307,7 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
                 payload.get("project"),
                 source_filename,
                 len(comments),
+                json.dumps(payload.get("repo_hints") or {}),
             ),
         )
 
@@ -358,12 +360,34 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
                 if len(hits) == 1:
                     project_id = hits[0]["project_id"]
 
+            recipient = cm.get("recipient_resolved") or "llm"
+            viewport_w = (cm.get("viewport") or {}).get("w")
+            repeat = None
+            if project_id:
+                priors = [
+                    {"id": r["id"], "page": feedback_state.normalize_path(r["page_url"]),
+                     "selector": r["selector"], "bbox": json.loads(r["bbox_json"] or "{}"),
+                     "shipped": bool(r["shipped_at"])}
+                    for r in c.execute(
+                        """SELECT cm.id, cm.page_url, cm.selector, cm.bbox_json, b.shipped_at
+                           FROM comments cm JOIN batches b ON b.id = cm.batch_id
+                           WHERE cm.project_id = ? AND cm.status = 'done'""",
+                        (project_id,),
+                    )
+                ]
+                repeat = feedback_state.classify_repeat(
+                    {"page": feedback_state.normalize_path(cm.get("page_url")),
+                     "selector": cm.get("selector"), "bbox": cm.get("bbox") or {}},
+                    priors,
+                )
+
             c.execute(
                 """INSERT INTO comments
                    (id, batch_id, created_at, edited_at, page_url, page_title,
                     region_type, selector, bbox_json, viewport_json, screenshot_path,
-                    viewport_path, comment, reviewer, reviewer_email, project, project_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    viewport_path, comment, reviewer, reviewer_email, project, project_id,
+                    recipient, viewport_w, repeat_of, repeat_kind)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     cid,
                     batch_id,
@@ -382,6 +406,10 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
                     reviewer_email,
                     project_label,
                     project_id,
+                    recipient,
+                    viewport_w,
+                    repeat[0] if repeat else None,
+                    repeat[1] if repeat else None,
                 ),
             )
 
