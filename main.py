@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import feedback_api
 import feedback_schema
 import feedback_state
 
@@ -1265,6 +1266,9 @@ def auth_google_revoke():
 @app.get("/api/auth/status")
 def auth_status():
     return _google_status()
+
+
+app.include_router(feedback_api.make_router(db, now_iso))
 
 
 def _cli() -> None:
