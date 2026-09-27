@@ -52,3 +52,14 @@ def test_row_changed_concurrently_is_skipped_and_others_still_queue(client):
     finally:
         with main.db() as c:
             c.execute("DROP TRIGGER t_stale")
+
+
+def test_comment_without_project_id_resolves_through_its_batch_project(client):
+    with main.db() as c:
+        c.execute("INSERT INTO projects (id, created_at, updated_at, name, repo) VALUES ('p9','t','t','P9','r/nine')")
+        c.execute("INSERT INTO batches (id, ingested_at, project_id) VALUES ('b9','t','p9')")
+        c.execute("INSERT INTO comments (id, batch_id, status, recipient, project_id, page_url) VALUES ('c9','b9','new','llm',NULL,'/')")
+    body = client.post("/api/comments/queue", json={"batch_ids": ["b9"]}).json()
+    assert body["queued"] == ["c9"], body
+    q = client.get("/api/queue").json()
+    assert [p["repo"] for p in q["projects"]] == ["r/nine"]

@@ -71,9 +71,10 @@ def load_project(c, pid: Optional[str]) -> Optional[dict]:
 
 
 def resolve_for_comment(c, row) -> Optional[dict]:
-    b = c.execute("SELECT repo_hints_json FROM batches WHERE id = ?", (row["batch_id"],)).fetchone()
+    b = c.execute("SELECT repo_hints_json, project_id FROM batches WHERE id = ?", (row["batch_id"],)).fetchone()
     hints = json.loads((b["repo_hints_json"] if b else None) or "{}")
-    return fs.resolve_repo(load_project(c, row["project_id"]), row["page_url"], hints)
+    pid = row["project_id"] or (b["project_id"] if b else None)
+    return fs.resolve_repo(load_project(c, pid), row["page_url"], hints)
 
 
 def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:

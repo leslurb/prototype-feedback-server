@@ -296,8 +296,8 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
         c.execute(
             """INSERT INTO batches
                (id, ingested_at, schema_version, extension_version, exported_at,
-                reviewer, project, source_filename, comment_count, repo_hints_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                reviewer, project, source_filename, comment_count, repo_hints_json, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 batch_id,
                 now_iso(),
@@ -309,9 +309,11 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
                 source_filename,
                 len(comments),
                 json.dumps(payload.get("repo_hints") or {}),
+                payload.get("project_id"),
             ),
         )
 
+        comment_project_ids = set()
         for cm in comments:
             cid = cm.get("id") or str(uuid.uuid4())
             screenshot_path = None
@@ -361,6 +363,7 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
                 if len(hits) == 1:
                     project_id = hits[0]["project_id"]
 
+            comment_project_ids.add(project_id)
             recipient = cm.get("recipient_resolved") or "llm"
             viewport_w = (cm.get("viewport") or {}).get("w")
             repeat = None
@@ -460,6 +463,10 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
                         at.get("title"),
                     ),
                 )
+
+        # No top-level project_id: if every comment landed in one project, the round is that project's.
+        if not payload.get("project_id") and len(comment_project_ids) == 1 and None not in comment_project_ids:
+            c.execute("UPDATE batches SET project_id = ? WHERE id = ?", (comment_project_ids.pop(), batch_id))
 
     # Write a slim "claude_input.json" + "claude_prompt.md" per batch.
     write_claude_artifacts(batch_id)

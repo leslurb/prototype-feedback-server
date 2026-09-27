@@ -54,3 +54,36 @@ def test_ingest_flags_regression_of_a_shipped_done_comment():
     with main.db() as c:
         cm = c.execute("SELECT repeat_of, repeat_kind FROM comments WHERE id='c-new'").fetchone()
     assert (cm["repeat_of"], cm["repeat_kind"]) == ("c-old", "regression")
+
+
+def test_ingest_stores_top_level_project_id_on_the_batch():
+    _project()
+    bid = main.ingest_payload(_payload(), "x.json")
+    with main.db() as c:
+        assert c.execute("SELECT project_id FROM batches WHERE id=?", (bid,)).fetchone()[0] == "proj1"
+
+
+def test_ingest_without_project_id_uses_the_single_auto_tagged_project():
+    _project()
+    with main.db() as c:
+        c.execute("""INSERT INTO project_reviewers (id, project_id, email, name, status)
+                     VALUES ('r1','proj1','mike@x.dev','Mike','invited')""")
+    p = _payload(reviewer_email="mike@x.dev")
+    del p["project_id"]
+    p["comments"].append({**p["comments"][0], "id": "c-two"})
+    bid = main.ingest_payload(p, "x.json")
+    with main.db() as c:
+        assert c.execute("SELECT project_id FROM batches WHERE id=?", (bid,)).fetchone()[0] == "proj1"
+
+
+def test_ingest_leaves_batch_project_null_when_comments_span_projects():
+    _project()
+    with main.db() as c:
+        c.execute("INSERT INTO projects (id, created_at, updated_at, name) VALUES ('proj2','t','t','Q')")
+    p = _payload()
+    del p["project_id"]
+    p["comments"][0]["project_id"] = "proj1"
+    p["comments"].append({**p["comments"][0], "id": "c-two", "project_id": "proj2"})
+    bid = main.ingest_payload(p, "x.json")
+    with main.db() as c:
+        assert c.execute("SELECT project_id FROM batches WHERE id=?", (bid,)).fetchone()[0] is None
