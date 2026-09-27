@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -32,6 +33,9 @@ def _get_bundle_dir():
     return Path(__file__).parent
 
 def _get_data_dir():
+    override = os.environ.get("PFB_DATA_DIR")
+    if override:
+        return Path(override)
     if getattr(sys, 'frozen', False):
         return Path(sys.executable).parent / "data"
     return Path(__file__).parent / "data"
