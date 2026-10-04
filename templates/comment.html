@@ -21,8 +21,8 @@
       {% if row.edited_at %}<div><span class="label">Edited</span><span class="mono small">{{ row.edited_at[:19].replace("T", " ") }}</span></div>{% endif %}
       <div><span class="label">Page</span><span><a href="{{ row.page_url }}" target="_blank" class="mono">{{ row.page_url }}</a></span></div>
       {% if row.selector %}<div><span class="label">Selector</span><code class="mono small">{{ row.selector }}</code></div>{% endif %}
-      <div><span class="label">bbox</span><code class="mono small">x={{ bbox.x|round|int }}, y={{ bbox.y|round|int }}, w={{ bbox.w|round|int }}, h={{ bbox.h|round|int }}</code></div>
-      <div><span class="label">Viewport</span><code class="mono small">{{ viewport.w }}×{{ viewport.h }} (scroll {{ viewport.scrollX or 0 }}, {{ viewport.scrollY or 0 }})</code></div>
+      {% if bbox.x is defined %}<div><span class="label">bbox</span><code class="mono small">x={{ bbox.x|round|int }}, y={{ bbox.y|round|int }}, w={{ bbox.w|round|int }}, h={{ bbox.h|round|int }}</code></div>{% endif %}
+      {% if viewport.w is defined %}<div><span class="label">Viewport</span><code class="mono small">{{ viewport.w }}×{{ viewport.h }} (scroll {{ viewport.scrollX or 0 }}, {{ viewport.scrollY or 0 }})</code></div>{% endif %}
     </div>
 
     {% if atts %}

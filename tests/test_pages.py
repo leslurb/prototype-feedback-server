@@ -38,9 +38,8 @@ def _seed():
                 ("c2", "r2", "new", "llm", "p1", "https://x.dev/"),
                 ("h", "r2", "new", "human", "p1", "https://x.dev/"),
                 ("s", "s1", "new", "llm", "p2", "https://y.dev/")]
-        c.executemany("INSERT INTO comments (id, batch_id, status, recipient, project_id, page_url, comment, bbox_json) "
-                      "VALUES (?,?,?,?,?,?, 'text ' || ?, '{\"x\":10,\"y\":20,\"w\":30,\"h\":40}')",
-                      [(*r, r[0]) for r in rows])
+        c.executemany("INSERT INTO comments (id, batch_id, status, recipient, project_id, page_url, comment) "
+                      "VALUES (?,?,?,?,?,?, 'text ' || ?)", [(*r, r[0]) for r in rows])
 
 
 def test_dashboard_lists_projects_rounds_and_states(client):
@@ -156,3 +155,20 @@ def test_comment_page_history_and_human_actions(client):
     assert "History" in html and "ingested" in html
     assert 'data-from="new" data-to="done"' in html
     assert 'data-to="queued"' not in html                  # human items are never queued
+
+
+def test_comment_page_renders_direct_issue_with_no_pin(client):
+    _seed()
+    cid = client.post("/api/projects/p1/issues", json={"title": "x", "page": "/"}).json()["id"]
+    r = client.get(f"/comment/{cid}")
+    assert r.status_code == 200
+    assert "queue-panel" in r.text
+
+
+def test_comment_page_renders_when_bbox_and_viewport_are_null(client):
+    _seed()
+    with main.db() as c:
+        c.execute("INSERT INTO comments (id, batch_id, status, recipient, project_id, page_url, comment) "
+                  "VALUES ('nopin', 'r2', 'new', 'llm', 'p1', 'https://x.dev/', 'text nopin')")
+    r = client.get("/comment/nopin")
+    assert r.status_code == 200
