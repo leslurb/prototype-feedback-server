@@ -372,18 +372,7 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
             viewport_w = (cm.get("viewport") or {}).get("w")
             repeat = None
             if project_id:
-                priors = [
-                    {"id": r["id"], "page": feedback_state.normalize_path(r["page_url"]),
-                     "selector": r["selector"], "bbox": json.loads(r["bbox_json"] or "{}"),
-                     "shipped": bool(r["shipped_at"])}
-                    for r in c.execute(
-                        """SELECT cm.id, cm.page_url, cm.selector, cm.bbox_json, b.shipped_at
-                           FROM comments cm JOIN batches b ON b.id = cm.batch_id
-                           WHERE cm.project_id = ? AND cm.status = 'done'
-                           ORDER BY cm.updated_at DESC, cm.created_at DESC""",
-                        (project_id,),
-                    )
-                ]
+                priors = feedback_api.done_priors(c, project_id)
                 repeat = feedback_state.classify_repeat(
                     {"page": feedback_state.normalize_path(cm.get("page_url")),
                      "selector": cm.get("selector"), "bbox": cm.get("bbox") or {}},
