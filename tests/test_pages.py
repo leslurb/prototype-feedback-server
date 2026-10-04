@@ -198,3 +198,25 @@ def test_project_page_has_mapping_form_with_current_values(client):
 def test_dashboard_js_is_served(client):
     r = client.get("/static/dashboard.js")
     assert r.status_code == 200 and "data-action" in r.text
+
+
+def test_file_route_refuses_a_sibling_dir_sharing_the_data_prefix(client, tmp_data_dir):
+    import shutil
+    sibling = tmp_data_dir.parent / (tmp_data_dir.name + "2")
+    sibling.mkdir(exist_ok=True)
+    try:
+        (sibling / "secret.txt").write_text("nope")
+        r = client.get(f"/file/%2E%2E/{sibling.name}/secret.txt")
+        assert r.status_code == 403
+    finally:
+        shutil.rmtree(sibling, ignore_errors=True)
+
+
+def test_file_route_serves_a_file_inside_data(client, tmp_data_dir):
+    (tmp_data_dir / "inside.txt").write_text("hello")
+    try:
+        r = client.get("/file/inside.txt")
+        assert r.status_code == 200 and r.text == "hello"
+    finally:
+        (tmp_data_dir / "inside.txt").unlink()
+

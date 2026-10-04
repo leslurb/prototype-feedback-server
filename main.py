@@ -67,8 +67,10 @@ def cors_origins(extra: Optional[str]) -> list[str]:
     return [PUBLISHED_EXTENSION_ORIGIN] + [o.strip() for o in (extra or "").split(",") if o.strip()]
 
 
-# Only the extension may call /api/* cross-origin; every JSON POST needs a preflight,
-# which a foreign page now fails.
+# The allowlist only governs CORS-enabled reads and preflighted requests (e.g. JSON POSTs):
+# a foreign page can't read our responses or pass a preflight. It does NOT stop "simple"
+# cross-site POSTs (text/plain or form bodies), which browsers send without a preflight.
+# A separate Sec-Fetch-Site/Origin check is planned before Plan D adds extension writes.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(os.environ.get("PFB_EXTRA_ORIGINS")),
@@ -686,7 +688,7 @@ def comment_detail(request: Request, comment_id: str):
 @app.get("/file/{path:path}")
 def serve_file(path: str):
     p = (DATA / path).resolve()
-    if not str(p).startswith(str(DATA.resolve())):
+    if not p.is_relative_to(DATA.resolve()):
         raise HTTPException(403)
     if not p.exists():
         raise HTTPException(404)
