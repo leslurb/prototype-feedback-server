@@ -193,3 +193,8 @@ def test_project_page_has_mapping_form_with_current_values(client):
     html = client.get("/project/p1").text
     assert 'id="mapping"' in html and 'value="r/a"' in html
     assert "https://x.dev\nhttps://y.dev" in html
+
+
+def test_dashboard_js_is_served(client):
+    r = client.get("/static/dashboard.js")
+    assert r.status_code == 200 and "data-action" in r.text
