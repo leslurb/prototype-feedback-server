@@ -370,5 +370,21 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
         with db() as c:
             return build_overview(c)
 
+    @router.get("/api/projects/{pid}/repeat-check")
+    def api_repeat_check(pid: str, pin_comment_id: str):
+        with db() as c:
+            pin = c.execute("SELECT page_url, selector, bbox_json FROM comments WHERE id = ?",
+                            (pin_comment_id,)).fetchone()
+            if pin is None:
+                raise HTTPException(404, "pin comment not found")
+            hit = fs.classify_repeat(
+                {"page": fs.normalize_path(pin["page_url"]), "selector": pin["selector"],
+                 "bbox": json.loads(pin["bbox_json"] or "{}")},
+                done_priors(c, pid, exclude_id=pin_comment_id))
+            if hit is None:
+                return {"repeat": None}
+            prior = c.execute("SELECT comment FROM comments WHERE id = ?", (hit[0],)).fetchone()
+        return {"repeat": {"id": hit[0], "kind": hit[1], "comment": prior["comment"] if prior else None}}
+
     router.change_status = change_status  # reused by later endpoints in this module
     return router

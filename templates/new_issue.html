@@ -1,0 +1,45 @@
+{% extends "layout.html" %}
+{% block title %}New issue — Prototype Feedback{% endblock %}
+{% block content %}
+<p class="breadcrumb"><a href="/">Dashboard</a> → New issue</p>
+<h1>New issue</h1>
+{% if not projects %}
+<p class="muted">Create a project first under <a href="/projects">Projects</a>.</p>
+{% else %}
+<form id="new-issue" class="sheet" data-project="{{ pid }}">
+  <label>Project
+    <select name="project">{% for p in projects %}<option value="{{ p.id }}" {% if p.id == pid %}selected{% endif %}>{{ p.name }}</option>{% endfor %}</select>
+    <span class="small {{ 'ok' if current.repo else 'err' }}" data-check-src="repo" data-ok="{{ 1 if current.repo else 0 }}">{{ ("repo mapped · " ~ current.repo) if current.repo else "no repo mapped: map it on the project page first" }}</span>
+  </label>
+  <label>What's wrong or what should change<input name="title"></label>
+  <fieldset><legend>Where</legend>
+    <input name="page" value="/" class="mono" aria-label="Page path">
+    <select name="viewport_w" aria-label="Viewport">
+      <option value="1440">Desktop · 1440</option><option value="768">Tablet · 768</option><option value="390">Phone · 390</option>
+    </select>
+    <div class="chips">{% for pg in pages %}<button type="button" class="btn small mono" data-action="pick-page" data-page="{{ pg }}">{{ pg }}</button>{% endfor %}</div>
+    <div class="small muted">Attach one of your pins (pins from the extension arrive with Plan D)</div>
+    {% for pin in pins %}<label class="pin"><input type="radio" name="pin" value="{{ pin.id }}"> <span class="mono small">{{ pin.selector }}</span> <span class="small muted">{{ pin.page_url }}</span></label>{% endfor %}
+    <label class="pin"><input type="radio" name="pin" value="" checked> No pin <span class="small muted">full-page check only</span></label>
+  </fieldset>
+  <div class="small" data-msg="repeat"></div>
+  <label>Details <span class="muted small">optional</span><textarea name="details" rows="2"></textarea></label>
+  <label>Expected result <span class="muted small">required for Claude</span>
+    <textarea name="expected_result" rows="2" placeholder="What you will see once it is fixed"></textarea>
+  </label>
+  <div><button type="button" class="btn small" disabled title="Needs an LLM call from the server; not wired yet">Draft it</button></div>
+  <div class="card"><div class="card-k">What gets checked</div><div class="small" data-what-checked></div></div>
+  <fieldset><legend>Who acts on it</legend>
+    <label class="pin"><input type="radio" name="recipient" value="llm" checked> Claude <span class="small muted">queueable; fixed by /feedback run</span></label>
+    <label class="pin"><input type="radio" name="recipient" value="human"> A person <span class="small muted">never queued; shows in Needs you</span></label>
+  </fieldset>
+  <ul class="checks" data-checks></ul>
+  <div>
+    <button type="submit" class="btn" name="mode" value="new">Save as New</button>
+    <button type="submit" class="btn primary" name="mode" value="queue" data-queue-button disabled>Save &amp; queue</button>
+  </div>
+  <div class="small" data-msg="save"></div>
+</form>
+{% endif %}
+<script src="/static/dashboard.js"></script>
+{% endblock %}

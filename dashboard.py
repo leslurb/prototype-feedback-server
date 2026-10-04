@@ -66,6 +66,26 @@ def make_dashboard_router(db: Callable, templates, now_iso: Callable[[], str]) -
         return templates.TemplateResponse("dashboard.html", {
             "request": request, "ov": ov, "needs": needs, "cap_note": cap_note})
 
+    @router.get("/new-issue", response_class=HTMLResponse)
+    def new_issue(request: Request, project: Optional[str] = None):
+        with db() as c:
+            projects = [dict(p) for p in c.execute(
+                "SELECT id, name, repo FROM projects WHERE archived = 0 ORDER BY name")]
+            pid = project if any(p["id"] == project for p in projects) else (projects[0]["id"] if projects else None)
+            pins, pages = [], []
+            if pid:
+                pins = [dict(r) for r in c.execute(
+                    """SELECT cm.id, cm.selector, cm.page_url FROM comments cm
+                       JOIN batches b ON b.id = cm.batch_id
+                       WHERE cm.project_id = ? AND cm.selector IS NOT NULL AND b.kind = 'export'
+                       ORDER BY cm.created_at DESC LIMIT 10""", (pid,))]
+                pages = sorted({fs.normalize_path(r["page_url"]) for r in c.execute(
+                    "SELECT page_url FROM comments WHERE project_id = ?", (pid,))})[:8]
+        current = next((p for p in projects if p["id"] == pid), {})
+        return templates.TemplateResponse("new_issue.html", {
+            "request": request, "projects": projects, "pid": pid, "current": current,
+            "pins": pins, "pages": pages})
+
     @router.get("/round/{bid}", response_class=HTMLResponse)
     def round_view(request: Request, bid: str):
         with db() as c:

@@ -172,3 +172,15 @@ def test_comment_page_renders_when_bbox_and_viewport_are_null(client):
                   "VALUES ('nopin', 'r2', 'new', 'llm', 'p1', 'https://x.dev/', 'text nopin')")
     r = client.get("/comment/nopin")
     assert r.status_code == 200
+
+
+def test_composer_lists_projects_pins_and_flags_unmapped(client):
+    _seed()
+    with main.db() as c:
+        c.execute("UPDATE comments SET selector = 'button.queue' WHERE id = 'c2'")
+    html = client.get("/new-issue?project=p1").text
+    assert "abdry" in html and "sunsip" in html
+    assert 'value="c2"' in html and "button.queue" in html        # pin picker
+    assert 'data-ok="1"' in html
+    assert re.search(r"<button[^>]*disabled[^>]*>Draft it</button>", html)
+    assert 'data-ok="0"' in client.get("/new-issue?project=p2").text
