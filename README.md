@@ -20,7 +20,7 @@ For development or customization, see the setup instructions below.
 ## What you get
 
 - **Drag-drop ingest** — drop the JSON file a reviewer sent you onto the
-  dashboard. Screenshots and attachments are split out to disk; comments go
+  Batches page (`/batches`). Screenshots and attachments are split out to disk; comments go
   into SQLite.
 - **Per-batch Claude prompt** — every ingest emits a slim `claude_input.json`
   (paths instead of base64) + a one-line prompt you paste into Claude Code.
@@ -77,7 +77,8 @@ chmod +x run.sh    # one-time, makes the launcher executable
 
 First run creates `.venv/` and pip-installs FastAPI + Uvicorn + Jinja2 + the
 Google libs (~45s). Subsequent starts are instant. Open
-<http://127.0.0.1:8090> — you should see the dashboard with a drop zone.
+<http://127.0.0.1:8090> — you should see the dashboard. The drop zone is on
+Batches (`/batches`).
 
 That's the minimum setup. The rest of the README covers the optional Google
 Workspace integration and advanced configuration.
@@ -97,7 +98,7 @@ PFB_PORT=9000 prototype-feedback-server  # via env var
 
 1. Reviewer sends you a `prototype-feedback_*.json` file (via email,
    Slack, AirDrop — your choice).
-2. Drop it onto the dashboard at <http://127.0.0.1:8090>.
+2. Drop it onto the Batches page at <http://127.0.0.1:8090/batches>.
 3. The server splits the JSON: one SQLite row per comment, screenshots and
    attachments extracted to `data/batches/<batch_id>/`.
 4. **Per batch** you get two Claude artifacts:
@@ -113,7 +114,10 @@ PFB_PORT=9000 prototype-feedback-server  # via env var
 
 | Path | What |
 |---|---|
-| `/` | Dashboard, drop zone, recent batches |
+| `/` | Dashboard — projects, rounds, what needs you, last run |
+| `/batches` | Drop zone + recent batches (was `/` before the dashboard) |
+| `/round/{id}` | One round: comments by page, human items, ship |
+| `/new-issue` | Compose your own issue for a project |
 | `/projects` | Project list + Google connection status |
 | `/project/{id}` | Project detail — reviewers, comments, invite/remind buttons |
 | `/comments` | All comments, filterable by reviewer / project / batch / text |
@@ -171,6 +175,7 @@ of headroom for personal use.
 | `PFB_PORT` | `8090` | Another service is using 8090. |
 | `PYTHON` | `python3` (sh) / `python` (bat) | Multiple Python installs. |
 | `GOOGLE_CLIENT_SECRET_PATH` | (unset) | OAuth client JSON not in a default location. |
+| `PFB_EXTRA_ORIGINS` | (unset) | Comma-separated extra CORS origins, e.g. an unpacked dev extension's `chrome-extension://<id>` origin. Only the published extension is allowed by default, so without this an unpacked dev build's popup can't reach the server. |
 
 ## Schema accepted
 
