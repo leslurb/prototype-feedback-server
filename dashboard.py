@@ -24,12 +24,16 @@ def needs_detail(c, now_iso_str: str) -> dict:
         return [dict(r) for r in c.execute(sql, args).fetchall()]
 
     return {
-        "blocked": q("SELECT id, comment, status_note FROM comments WHERE status = 'blocked' "
-                     "ORDER BY updated_at DESC LIMIT 3"),
-        "to_confirm": q("SELECT id, comment FROM comments WHERE status = 'verified' "
-                        "ORDER BY updated_at DESC LIMIT 3"),
-        "human": q("SELECT id, comment FROM comments WHERE recipient = 'human' "
-                   "AND status NOT IN ('done', 'skipped') ORDER BY created_at DESC LIMIT 3"),
+        "blocked": q("""SELECT cm.id, cm.comment, cm.status_note FROM comments cm
+                        JOIN projects p ON p.id = cm.project_id AND p.archived = 0
+                        WHERE cm.status = 'blocked' ORDER BY cm.updated_at DESC LIMIT 3"""),
+        "to_confirm": q("""SELECT cm.id, cm.comment FROM comments cm
+                           JOIN projects p ON p.id = cm.project_id AND p.archived = 0
+                           WHERE cm.status = 'verified' ORDER BY cm.updated_at DESC LIMIT 3"""),
+        "human": q("""SELECT cm.id, cm.comment FROM comments cm
+                      JOIN projects p ON p.id = cm.project_id AND p.archived = 0
+                      WHERE cm.recipient = 'human' AND cm.status NOT IN ('done', 'skipped')
+                      ORDER BY cm.created_at DESC LIMIT 3"""),
         "silent": q("""SELECT pr.email, pr.name, pr.invited_at, p.id AS project_id, p.name AS project
                        FROM project_reviewers pr JOIN projects p ON p.id = pr.project_id
                        WHERE pr.status = 'invited' AND pr.invited_at IS NOT NULL

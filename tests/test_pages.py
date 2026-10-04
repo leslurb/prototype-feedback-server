@@ -65,3 +65,22 @@ def test_needs_you_strip(client):
     assert "1 to confirm" in html and 'href="/comment/b"' in html
     assert "1 for you, not Claude" in html and 'href="/comment/h"' in html
     assert "No repo mapped" in html and 'href="/project/p2#mapping"' in html
+
+
+def test_needs_you_strip_ignores_archived_projects(client):
+    _seed()
+    with main.db() as c:
+        c.execute("INSERT INTO projects (id, created_at, updated_at, name, archived) "
+                  "VALUES ('p3','t','t','archived-proj',1)")
+        c.execute("INSERT INTO batches (id, ingested_at, reviewer, project, project_id, kind) "
+                  "VALUES ('r3','t','Mike','archived-proj','p3','export')")
+        rows = [("ab", "r3", "blocked", "llm", "p3", "https://z.dev/"),
+                ("av", "r3", "verified", "llm", "p3", "https://z.dev/"),
+                ("ah", "r3", "new", "human", "p3", "https://z.dev/")]
+        c.executemany("INSERT INTO comments (id, batch_id, status, recipient, project_id, page_url, comment) "
+                      "VALUES (?,?,?,?,?,?, 'text ' || ?)", [(*r, r[0]) for r in rows])
+    html = client.get("/").text
+    for cid in ("ab", "av", "ah"):
+        assert f'href="/comment/{cid}"' not in html
+    assert "1 to confirm" in html and 'href="/comment/b"' in html
+    assert "1 for you, not Claude" in html and 'href="/comment/h"' in html
