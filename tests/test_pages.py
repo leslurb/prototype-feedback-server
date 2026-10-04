@@ -38,8 +38,9 @@ def _seed():
                 ("c2", "r2", "new", "llm", "p1", "https://x.dev/"),
                 ("h", "r2", "new", "human", "p1", "https://x.dev/"),
                 ("s", "s1", "new", "llm", "p2", "https://y.dev/")]
-        c.executemany("INSERT INTO comments (id, batch_id, status, recipient, project_id, page_url, comment) "
-                      "VALUES (?,?,?,?,?,?, 'text ' || ?)", [(*r, r[0]) for r in rows])
+        c.executemany("INSERT INTO comments (id, batch_id, status, recipient, project_id, page_url, comment, bbox_json) "
+                      "VALUES (?,?,?,?,?,?, 'text ' || ?, '{\"x\":10,\"y\":20,\"w\":30,\"h\":40}')",
+                      [(*r, r[0]) for r in rows])
 
 
 def test_dashboard_lists_projects_rounds_and_states(client):
@@ -136,3 +137,22 @@ def test_round_number_counts_the_rounds_own_project(client):
     dash = client.get("/").text
     assert dash.count("<strong>Round 1</strong>") == 2
     assert "Unassigned · Round" in client.get("/round/z1").text
+
+
+def test_comment_page_offers_confirm_actions_and_keeps_old_content(client):
+    _seed()
+    html = client.get("/comment/b").text
+    assert 'data-id="b" data-from="verified" data-to="done"' in html
+    assert "no after-shot yet — verify arrives in Plan C" in html
+    assert "Claude prompt for the whole batch" in html      # pre-existing section kept
+
+
+def test_comment_page_history_and_human_actions(client):
+    _seed()
+    with main.db() as c:
+        c.execute("INSERT INTO status_events (id, comment_id, at, from_status, to_status, actor, note) "
+                  "VALUES ('e1', 'h', '2026-10-01T10:00:00+00:00', NULL, 'new', 'user', 'ingested')")
+    html = client.get("/comment/h").text
+    assert "History" in html and "ingested" in html
+    assert 'data-from="new" data-to="done"' in html
+    assert 'data-to="queued"' not in html                  # human items are never queued

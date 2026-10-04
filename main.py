@@ -31,6 +31,7 @@ import dashboard
 import feedback_api
 import feedback_schema
 import feedback_state
+import feedback_views
 
 def _get_bundle_dir():
     if getattr(sys, 'frozen', False):
@@ -662,6 +663,9 @@ def comment_detail(request: Request, comment_id: str):
             "SELECT * FROM attachments WHERE comment_id = ?", (comment_id,)
         ).fetchall()
         batch = c.execute("SELECT * FROM batches WHERE id = ?", (row["batch_id"],)).fetchone()
+        history = c.execute(
+            "SELECT * FROM status_events WHERE comment_id = ? ORDER BY at", (comment_id,)
+        ).fetchall()
     bbox = json.loads(row["bbox_json"] or "{}")
     viewport = json.loads(row["viewport_json"] or "{}")
     return templates.TemplateResponse(
@@ -673,6 +677,8 @@ def comment_detail(request: Request, comment_id: str):
             "batch": batch,
             "bbox": bbox,
             "viewport": viewport,
+            "history": history,
+            "actions": feedback_views.actions_for(row["status"], row["recipient"]),
         },
     )
 
