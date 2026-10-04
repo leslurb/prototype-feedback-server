@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import dashboard
 import feedback_api
 import feedback_schema
 import feedback_state
@@ -1287,6 +1288,7 @@ def auth_status():
 
 
 app.include_router(feedback_api.make_router(db, now_iso))
+app.include_router(dashboard.make_dashboard_router(db, templates, now_iso))
 
 
 def _cli() -> None:

@@ -202,3 +202,50 @@ a { color: var(--primary); }
 .ac-item:last-child { border-bottom: none; }
 .ac-item.ac-manual { background: #eff6ff; }
 .ac-msg { padding: 10px 12px; color: var(--muted); font-size: 12px; }
+
+/* ---- dashboard (Plan B) ---- */
+.dash-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.dash-actions { display: flex; gap: 12px; align-items: flex-start; }
+.queue-box { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.needs { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin: 16px 0; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.card-k { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.card-k.bad, .err { color: var(--danger); }
+.card-k.info { color: var(--primary); }
+.ok { color: var(--success); }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin: 8px 0; }
+.legend span { display: inline-flex; align-items: center; gap: 4px; }
+.legend .seg { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.proj { background: var(--card); border: 1px solid var(--border); border-radius: 12px; margin: 12px 0; overflow: hidden; }
+.proj-row, .round-row { display: grid; grid-template-columns: 24px 240px 1fr 160px 120px; gap: 14px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.round-row { grid-template-columns: 24px 240px 1fr 120px 60px; padding-left: 36px; }
+.proj-name { font-size: 16px; font-weight: 600; text-decoration: none; color: var(--text); }
+.bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: #eef2f7; }
+.seg-done { background: #15803d; } .seg-verified { background: #86c79a; } .seg-doing { background: #d4a017; }
+.seg-queued { background: #2563eb; } .seg-new { background: #94a3b8; } .seg-blocked { background: #c2410c; }
+.seg-skipped { background: repeating-linear-gradient(45deg, #64748b 0 3px, #eef2f7 3px 6px); }
+.chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #f1f5f9; white-space: nowrap; }
+.chip.good, .chip.st-done { background: #dcfce7; color: #166534; }
+.chip.warn, .chip.st-doing { background: #fef3c7; color: #92400e; }
+.chip.info, .chip.st-verified, .chip.st-queued { background: #dbeafe; color: #1e40af; }
+.chip.bad, .chip.st-blocked { background: #ffedd5; color: #9a3412; }
+.chip.purple { background: #ede9fe; color: #5b21b6; }
+.chip.dark { background: #0f172a; color: #fff; }
+.lanes { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.lane h2 { font-size: 14px; margin: 12px 0 8px; }
+.ccard { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
+.ccard.status-blocked { box-shadow: inset 0 0 0 2px #c2410c; }
+.ccard-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.ccard-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.queue-panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 20px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0; }
+.grid2 img { max-width: 100%; border: 1px solid var(--border); border-radius: 8px; }
+.placeholder { border: 2px dashed var(--border); border-radius: 8px; padding: 40px 12px; text-align: center; color: var(--muted); }
+.sheet { display: flex; flex-direction: column; gap: 12px; max-width: 680px; }
+.sheet label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 13px; }
+.sheet input, .sheet textarea, .sheet select { font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-weight: 400; }
+.sheet fieldset { border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; gap: 6px; }
+.sheet label.pin { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; }
+.checks { list-style: none; padding: 0; display: flex; gap: 14px; font-size: 13px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.btn { white-space: nowrap; }

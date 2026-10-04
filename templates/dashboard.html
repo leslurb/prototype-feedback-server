@@ -1,0 +1,88 @@
+{% extends "layout.html" %}
+{% block title %}Dashboard — Prototype Feedback{% endblock %}
+{% block content %}
+<div class="dash-head">
+  <div>
+    <h1>Prototype Feedback</h1>
+    <p class="muted">{{ ov.projects|length }} projects · two producers: reviewer exports and your own issues</p>
+  </div>
+  <div class="dash-actions">
+    <a class="btn" href="/new-issue">+ New issue</a>
+    <div class="queue-box">
+      <button class="btn primary" data-action="queue-selected" disabled>Select to queue</button>
+      <div class="small">Copies <code>/feedback run</code> · drains everything queued</div>
+      <div class="small muted">{{ cap_note }}</div>
+      <div class="small" data-msg="queue"></div>
+    </div>
+  </div>
+</div>
+
+<section class="needs" aria-label="Needs you">
+  {% if ov.last_run %}
+  <div class="card"><div class="card-k">Last run</div>
+    <div>{{ ov.last_run.started_at[:16].replace("T", " ") }} · {{ ov.last_run.status }}</div>
+    <div class="small muted">{% for k, v in ov.last_run.summary.items() %}{{ v }} {{ k }}{% if not loop.last %} · {% endif %}{% endfor %}</div>
+  </div>
+  {% endif %}
+  {% if needs.to_confirm %}
+  <div class="card"><div class="card-k info">{{ ov.needs_you.to_confirm }} to confirm</div>
+    {% for c in needs.to_confirm %}<div><a href="/comment/{{ c.id }}">{{ (c.comment or c.id)|truncate(60) }}</a></div>{% endfor %}
+  </div>
+  {% endif %}
+  {% if needs.blocked %}
+  <div class="card"><div class="card-k bad">{{ ov.needs_you.blocked }} blocked</div>
+    {% for c in needs.blocked %}<div><a href="/comment/{{ c.id }}">{{ (c.comment or c.id)|truncate(60) }}</a><div class="small muted">{{ c.status_note or "" }}</div></div>{% endfor %}
+  </div>
+  {% endif %}
+  {% if needs.human %}
+  <div class="card"><div class="card-k">{{ ov.needs_you.human_open }} for you, not Claude</div>
+    {% for c in needs.human %}<div><a href="/comment/{{ c.id }}">{{ (c.comment or c.id)|truncate(60) }}</a></div>{% endfor %}
+  </div>
+  {% endif %}
+  {% for u in ov.needs_you.unmapped_projects %}
+  <div class="card"><div class="card-k bad">No repo mapped</div>
+    <div>{{ u.name }} · {{ u.waiting }} waiting</div>
+    <a class="btn small" href="/project/{{ u.project_id }}#mapping">Map repo</a>
+  </div>
+  {% endfor %}
+  {% for s in needs.silent %}
+  <div class="card"><div class="card-k">Reviewer silent</div>
+    <div>{{ s.name or s.email }} · {{ s.project }}</div>
+    <div class="small muted">invited {{ s.invited_at[:10] }}</div>
+    <button class="btn small" data-action="remind" data-project="{{ s.project_id }}">Send reminder</button>
+    <div class="small" data-msg="remind-{{ s.project_id }}"></div>
+  </div>
+  {% endfor %}
+  {% if not (needs.to_confirm or needs.blocked or needs.human or ov.needs_you.unmapped_projects or needs.silent) %}
+  <div class="card muted">Nothing needs you.</div>
+  {% endif %}
+</section>
+
+<div class="legend">{% for s in ["done", "verified", "doing", "queued", "new", "blocked", "skipped"] %}<span><i class="seg seg-{{ s }}"></i>{{ s }}</span>{% endfor %}</div>
+
+{% for p in ov.projects %}
+<article class="proj">
+  <div class="proj-row">
+    <input type="checkbox" data-project-toggle="{{ p.id }}" aria-label="Select all queueable rounds in {{ p.name }}">
+    <div><a href="/project/{{ p.id }}" class="proj-name">{{ p.name }}</a>
+      <div class="mono small muted">{{ p.repo or "no repo mapped" }}</div></div>
+    <div><div class="bar">{% for s in p.segments %}<i class="seg seg-{{ s.status }}" style="flex-grow: {{ s.n }}"></i>{% endfor %}</div>
+      <div class="small">{{ p.summary }}</div></div>
+    <div class="small"><span class="mono">{{ p.trend|join(" → ") or "—" }}</span><div class="muted">reviewer comments / round</div></div>
+    <div>{% if p.repeats %}<span class="chip bad">{{ p.repeats }} repeat{{ "s" if p.repeats != 1 else "" }}</span>{% else %}<span class="chip plain">no repeats</span>{% endif %}</div>
+  </div>
+  {% for r in p.rounds %}
+  <div class="round-row">
+    <input type="checkbox" name="round" value="{{ r.id }}" data-project="{{ p.id }}" data-new="{{ r.queueable }}" {% if not r.queueable %}disabled{% endif %} aria-label="Select {{ r.label }}">
+    <div><strong>{{ r.label }}</strong> <span class="muted small">{{ r.reviewer or "" }} · {{ r.ingested_at[:10] }}</span></div>
+    <div class="small">{{ r.summary }}{% if r.human_open %} · {{ r.human_open }} human open{% endif %}</div>
+    <span class="chip {{ r.state_class }}">{{ r.state }}</span>
+    <a href="/round/{{ r.id }}">Open</a>
+  </div>
+  {% endfor %}
+</article>
+{% else %}
+<p class="muted">No projects yet. Create one under <a href="/projects">Projects</a>.</p>
+{% endfor %}
+<script src="/static/dashboard.js"></script>
+{% endblock %}
