@@ -12,18 +12,18 @@
   <div class="grid2">
     <div><div class="card-k">Expected result</div><div>{{ row.expected_result or "—" }}</div></div>
     <div><div class="card-k">Automatic check</div>
-      <div class="small">{% if row.verified_at %}verified {{ row.verified_at[:16].replace("T", " ") }}{% if row.verify_selector %} · found by <code>{{ row.verify_selector }}</code>{% endif %}{% else %}not run yet{% endif %}</div></div>
+      <div class="small">{% if row.verified_at %}verified {{ row.verified_at|et }}{% if row.verify_selector %} · found by <code>{{ row.verify_selector }}</code>{% endif %}{% else %}not run yet{% endif %}</div></div>
   </div>
   <div class="grid2">
     <figure><figcaption class="small">Before · reviewer's crop</figcaption>
-      {% if row.screenshot_path %}<img src="/file/{{ row.screenshot_path }}" alt="before">{% else %}<div class="placeholder">no before-shot (no pin)</div>{% endif %}</figure>
+      {% if row.screenshot_path %}<img src="/file/{{ row.screenshot_path }}" alt="before">{% else %}<div class="placeholder">no before-shot captured</div>{% endif %}</figure>
     <figure><figcaption class="small">After · preview capture</figcaption>
       {% if row.after_path %}<img src="/file/{{ row.after_path }}" alt="after">{% else %}<div class="placeholder">no after-shot yet — verify arrives in Plan C</div>{% endif %}</figure>
   </div>
   {% endif %}
   {% if history %}
   <h3>History</h3>
-  <ol class="history">{% for h in history %}<li><span class="mono small">{{ h.at[:16].replace("T", " ") }}</span> {{ h.from_status or "—" }} → <strong>{{ h.to_status }}</strong> <span class="muted small">{{ h.actor }}{% if h.note %} · {{ h.note }}{% endif %}</span></li>{% endfor %}</ol>
+  <ol class="history">{% for h in history %}<li><span class="mono small">{{ h.at|et }}</span> {{ h.from_status or "—" }} → <strong>{{ h.to_status }}</strong> <span class="muted small">{{ h.actor }}{% if h.note %} · {{ h.note }}{% endif %}</span></li>{% endfor %}</ol>
   {% endif %}
 </section>
 <script src="/static/dashboard.js"></script>

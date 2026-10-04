@@ -20,7 +20,7 @@
 <section class="needs" aria-label="Needs you">
   {% if ov.last_run %}
   <div class="card"><div class="card-k">Last run</div>
-    <div>{{ ov.last_run.started_at[:16].replace("T", " ") }} · {{ ov.last_run.status }}</div>
+    <div>{{ ov.last_run.started_at|et }} · {{ ov.last_run.status }}</div>
     <div class="small muted">{% for k, v in ov.last_run.summary.items() %}{{ v }} {{ k }}{% if not loop.last %} · {% endif %}{% endfor %}</div>
   </div>
   {% endif %}

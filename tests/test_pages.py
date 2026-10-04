@@ -220,3 +220,56 @@ def test_file_route_serves_a_file_inside_data(client, tmp_data_dir):
     finally:
         (tmp_data_dir / "inside.txt").unlink()
 
+
+def test_comment_page_before_shot_placeholder_and_round_breadcrumb(client):
+    _seed()
+    html = client.get("/comment/b").text
+    assert "no before-shot captured" in html
+    assert 'href="/round/r2"' in html
+    assert 'href="/comments?batch=r2"' in html          # the batch link stays
+
+
+def test_comment_history_times_render_in_et(client):
+    _seed()
+    with main.db() as c:
+        c.execute("INSERT INTO status_events (id, comment_id, at, from_status, to_status, actor, note) "
+                  "VALUES ('e2', 'b', '2026-10-01T14:30:00+00:00', 'doing', 'verified', 'drain', NULL)")
+        c.execute("UPDATE comments SET verified_at = '2026-10-01T14:31:00+00:00' WHERE id = 'b'")
+    html = client.get("/comment/b").text
+    assert "2026-10-01 10:30 ET" in html
+    assert "verified 2026-10-01 10:31 ET" in html
+
+
+def test_dashboard_last_run_renders_in_et(client):
+    _seed()
+    with main.db() as c:
+        c.execute("INSERT INTO runs (id, started_at, heartbeat_at, status, summary) "
+                  "VALUES ('run1', '2026-10-01T14:30:00+00:00', '2026-10-01T14:30:00+00:00', 'done', '{}')")
+    assert "2026-10-01 10:30 ET" in client.get("/").text
+
+
+def test_human_only_round_says_nothing_to_ship(client):
+    _seed()
+    with main.db() as c:
+        c.execute("INSERT INTO batches (id, ingested_at, reviewer, project, project_id, kind) "
+                  "VALUES ('ho','2026-09-30','Mike','abdry','p1','export')")
+        c.execute("INSERT INTO comments (id, batch_id, status, recipient, project_id, page_url, comment) "
+                  "VALUES ('hx','ho','new','human','p1','https://x.dev/','text hx')")
+    html = client.get("/round/ho").text
+    assert "Nothing to ship: no LLM items" in html
+    assert "Unlocks when" not in html
+
+
+def test_new_issue_unknown_or_archived_project_is_404(client):
+    _seed()
+    with main.db() as c:
+        c.execute("INSERT INTO projects (id, created_at, updated_at, name, archived) VALUES ('p9','t','t','old',1)")
+    assert client.get("/new-issue?project=nope").status_code == 404
+    assert client.get("/new-issue?project=p9").status_code == 404
+
+
+def test_new_issue_without_project_uses_the_first(client):
+    _seed()
+    r = client.get("/new-issue")
+    assert r.status_code == 200
+    assert 'data-project="p1"' in r.text

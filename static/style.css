@@ -249,3 +249,6 @@ a { color: var(--primary); }
 .checks { list-style: none; padding: 0; display: flex; gap: 14px; font-size: 13px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .btn { white-space: nowrap; }
+.btn:disabled, .btn:disabled:hover { opacity: .5; cursor: not-allowed; }
+.btn.primary:disabled:hover { background: var(--primary); }
+.pre-line { white-space: pre-line; }

@@ -126,13 +126,24 @@
       say("queue", `Queued ${res.json.queued.length}`
         + (sk.length ? `, skipped ${sk.length} (${[...new Set(sk.map((s) => s.reason))].join(", ")})` : "")
         + (copied ? " · /feedback run copied" : " · copy failed: type /feedback run"), sk.length > 0 || !copied);
-      setTimeout(() => location.reload(), 1500);
+      if (!sk.length) setTimeout(() => location.reload(), 1500);   // keep skip reasons on screen
     } else if (a === "ship") {
+      b.disabled = true;
       const res = await api("POST", `/api/rounds/${b.dataset.batch}/mark`, { what: "shipped" });
-      if (res.ok) location.reload(); else say("ship", detail(res), true);
+      if (res.ok) location.reload(); else { say("ship", detail(res), true); b.disabled = false; }
     } else if (a === "remind") {
+      const key = `remind-${b.dataset.project}`;
       const res = await api("POST", `/api/projects/${b.dataset.project}/remind`, { draft_only: true });
-      say(`remind-${b.dataset.project}`, res.ok ? "Reminder drafted in Gmail" : detail(res), !res.ok);
+      if (!res.ok) { say(key, detail(res), true); return; }
+      const results = (res.json && res.json.results) || [];
+      const ok = results.filter((x) => x.ok).length;
+      const failed = results.filter((x) => !x.ok);
+      const errors = failed.map((f) => `${f.reviewer}: ${f.error}`).join("; ");
+      if (ok === 0) {
+        say(key, "No reminders drafted: " + (errors || "nobody is waiting on an invite"), true);
+      } else {
+        say(key, `Drafted ${ok} reminder(s)` + (errors ? `. Errors: ${errors}` : ""), failed.length > 0);
+      }
     } else if (a === "pick-page") {
       const f = document.getElementById("new-issue");
       f.elements.page.value = b.dataset.page;

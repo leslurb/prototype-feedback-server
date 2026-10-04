@@ -13,7 +13,7 @@
     {% else %}
       <button class="btn" disabled title="Needs Plan D (resolutions export)">Send for re-review</button>
       <button class="btn primary" data-action="ship" data-batch="{{ batch.id }}" {% if not can_ship or batch.shipped_at %}disabled{% endif %}>{% if batch.shipped_at %}Shipped{% else %}Ship to main{% endif %}</button>
-      <div class="small muted">{% if not can_ship and not batch.shipped_at %}Unlocks when every LLM item is Done or Skipped · {% endif %}re-review needs Plan D</div>
+      <div class="small muted">{% if llm_count == 0 %}Nothing to ship: no LLM items · {% elif not can_ship and not batch.shipped_at %}Unlocks when every LLM item is Done or Skipped · {% endif %}re-review needs Plan D</div>
       <div class="small" data-msg="ship"></div>
     {% endif %}
   </div>

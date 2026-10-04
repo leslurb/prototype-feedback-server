@@ -57,6 +57,7 @@ BATCHES.mkdir(exist_ok=True)
 app = FastAPI(title="Prototype Feedback")
 app.mount("/static", StaticFiles(directory=BUNDLE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BUNDLE_DIR / "templates")
+templates.env.filters["et"] = feedback_views.to_et  # shared with dashboard.py's router
 
 PUBLISHED_EXTENSION_ORIGIN = "chrome-extension://lkpciiloidfgdhlgaefcbggajlfljmbp"
 

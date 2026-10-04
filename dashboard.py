@@ -71,7 +71,9 @@ def make_dashboard_router(db: Callable, templates, now_iso: Callable[[], str]) -
         with db() as c:
             projects = [dict(p) for p in c.execute(
                 "SELECT id, name, repo FROM projects WHERE archived = 0 ORDER BY name")]
-            pid = project if any(p["id"] == project for p in projects) else (projects[0]["id"] if projects else None)
+            if project is not None and not any(p["id"] == project for p in projects):
+                raise HTTPException(404, f"project {project} not found (or archived)")
+            pid = project if project is not None else (projects[0]["id"] if projects else None)
             pins, pages = [], []
             if pid:
                 pins = [dict(r) for r in c.execute(
