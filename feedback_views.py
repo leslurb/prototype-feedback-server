@@ -24,6 +24,7 @@ ACTIONS = [
     ("queued", "new", "Unqueue", ""),
     ("queued", "skipped", "Skip", ""),
     ("doing", "skipped", "Skip (cancels at merge)", ""),
+    ("doing", "queued", "Reset stale claim", ""),
     ("blocked", "queued", "Re-queue", "primary"),
     ("blocked", "skipped", "Skip", ""),
     ("done", "queued", "Reopen", ""),

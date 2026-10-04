@@ -44,6 +44,8 @@ def test_key_actions_present():
     assert ("new", "queued") in {(a["from"], a["to"]) for a in fv.actions_for("new", "llm")}
     assert ("new", "done") in {(a["from"], a["to"]) for a in fv.actions_for("new", "human")}
     assert ("new", "done") not in {(a["from"], a["to"]) for a in fv.actions_for("new", "llm")}
+    assert ("doing", "queued") in {(a["from"], a["to"]) for a in fv.actions_for("doing", "llm")}
+    assert ("doing", "queued") not in {(a["from"], a["to"]) for a in fv.actions_for("doing", "human")}
 
 
 @pytest.mark.parametrize("hm,in_window", [((7, 59), False), ((8, 0), True), ((8, 44), True), ((8, 45), False),
