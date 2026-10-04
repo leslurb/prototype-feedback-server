@@ -373,10 +373,14 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
     @router.get("/api/projects/{pid}/repeat-check")
     def api_repeat_check(pid: str, pin_comment_id: str):
         with db() as c:
-            pin = c.execute("SELECT page_url, selector, bbox_json FROM comments WHERE id = ?",
+            if load_project(c, pid) is None:
+                raise HTTPException(404, f"project {pid} not found")
+            pin = c.execute("SELECT page_url, selector, bbox_json, project_id FROM comments WHERE id = ?",
                             (pin_comment_id,)).fetchone()
             if pin is None:
                 raise HTTPException(404, "pin comment not found")
+            if pin["project_id"] is not None and pin["project_id"] != pid:
+                raise HTTPException(422, "pin belongs to another project")
             hit = fs.classify_repeat(
                 {"page": fs.normalize_path(pin["page_url"]), "selector": pin["selector"],
                  "bbox": json.loads(pin["bbox_json"] or "{}")},

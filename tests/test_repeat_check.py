@@ -27,3 +27,18 @@ def test_a_done_pin_does_not_match_itself(client):
 def test_unknown_pin_is_404(client):
     _seed()
     assert client.get("/api/projects/p1/repeat-check", params={"pin_comment_id": "nope"}).status_code == 404
+
+
+def test_unknown_project_is_404(client):
+    _seed()
+    assert client.get("/api/projects/nope/repeat-check", params={"pin_comment_id": "pin"}).status_code == 404
+
+
+def test_pin_belonging_to_another_project_is_422(client):
+    _seed()
+    with main.db() as c:
+        c.execute("INSERT INTO projects (id, created_at, updated_at, name, repo) VALUES ('p2','t','t','Q','r/b')")
+        c.execute("INSERT INTO comments (id, batch_id, project_id, status, page_url, selector, bbox_json) "
+                  "VALUES ('otherpin','new','p2','new','https://x.dev/?a=1','footer img','{}')")
+    assert client.get("/api/projects/p1/repeat-check",
+                       params={"pin_comment_id": "otherpin"}).status_code == 422
