@@ -734,7 +734,7 @@ def delete_batch(batch_id: str):
             bd.rmdir()
         except OSError:
             pass
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/batches", status_code=303)
 
 
 @app.post("/api/comment/{comment_id}/delete")
