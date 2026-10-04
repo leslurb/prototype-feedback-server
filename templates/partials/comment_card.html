@@ -1,0 +1,13 @@
+<div class="ccard status-{{ c.status }}">
+  <div class="ccard-top">
+    <a class="mono small" href="/comment/{{ c.id }}">#{{ c.id[:8] }}</a>
+    {% if c.reviewer == "You" %}<span class="chip dark">Your issue</span>{% endif %}
+    <span class="chip st-{{ c.status }}">{{ c.status }}</span>
+  </div>
+  <div>{{ c.comment }}</div>
+  {% if c.repeat_kind %}<div class="chip bad">{{ "Regression" if c.repeat_kind == "regression" else "Fix didn't take" }} of <a href="/comment/{{ c.repeat_of }}">#{{ c.repeat_of[:8] }}</a></div>{% endif %}
+  {% if c.status_note %}<div class="small muted">{{ c.status_note }}</div>{% endif %}
+  <div class="small mono muted">{{ c.selector or "no pin" }}{% if c.viewport_w %} · {{ c.viewport_w }}px{% endif %}{% if c.commit_sha %} · {{ c.commit_sha[:7] }}{% endif %}</div>
+  <div class="ccard-actions">{% for a in c.actions %}<button class="btn small {{ a.kind }}" data-action="status" data-id="{{ c.id }}" data-from="{{ a.from }}" data-to="{{ a.to }}">{{ a.label }}</button>{% endfor %}</div>
+  <div class="small" data-msg="{{ c.id }}"></div>
+</div>

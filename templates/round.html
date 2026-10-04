@@ -1,0 +1,35 @@
+{% extends "layout.html" %}
+{% block title %}{{ label }} — Prototype Feedback{% endblock %}
+{% block content %}
+<p class="breadcrumb"><a href="/">Dashboard</a> → {{ project.name if project else "Unassigned" }} → {{ label }}</p>
+<div class="dash-head">
+  <div>
+    <h1>{{ project.name if project else "Unassigned" }} · {{ label }} <span class="chip {{ state_class }}">{{ state }}</span></h1>
+    <p class="muted small">{{ batch.reviewer or "—" }} · {{ batch.ingested_at[:10] }} · {{ llm_count }} LLM, {{ human|length }} human{% if project and project.preview_url %} · preview <a href="{{ project.preview_url }}" target="_blank" class="mono">{{ project.preview_url }}</a>{% endif %}</p>
+  </div>
+  <div class="dash-actions">
+    {% if batch.kind == "direct" %}
+      <span class="small muted">Standing stream: your issues ship with a round, never on their own.</span>
+    {% else %}
+      <button class="btn" disabled title="Needs Plan D (resolutions export)">Send for re-review</button>
+      <button class="btn primary" data-action="ship" data-batch="{{ batch.id }}" {% if not can_ship or batch.shipped_at %}disabled{% endif %}>{% if batch.shipped_at %}Shipped{% else %}Ship to main{% endif %}</button>
+      <div class="small muted">{% if not can_ship and not batch.shipped_at %}Unlocks when every LLM item is Done or Skipped · {% endif %}re-review needs Plan D</div>
+      <div class="small" data-msg="ship"></div>
+    {% endif %}
+  </div>
+</div>
+<section class="lanes">
+{% for lane in lanes %}
+  <div class="lane"><h2 class="mono">{{ lane.page }}</h2>
+  {% for c in lane.comments %}{% include "partials/comment_card.html" %}{% endfor %}
+  </div>
+{% else %}
+  <p class="muted">No LLM items in this round.</p>
+{% endfor %}
+</section>
+{% if human %}
+<h2>For you, not for Claude · {{ human|length }}</h2>
+<section class="lanes">{% for c in human %}{% include "partials/comment_card.html" %}{% endfor %}</section>
+{% endif %}
+<script src="/static/dashboard.js"></script>
+{% endblock %}

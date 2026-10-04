@@ -66,4 +66,41 @@ def make_dashboard_router(db: Callable, templates, now_iso: Callable[[], str]) -
         return templates.TemplateResponse("dashboard.html", {
             "request": request, "ov": ov, "needs": needs, "cap_note": cap_note})
 
+    @router.get("/round/{bid}", response_class=HTMLResponse)
+    def round_view(request: Request, bid: str):
+        with db() as c:
+            b = c.execute("SELECT * FROM batches WHERE id = ?", (bid,)).fetchone()
+            if b is None:
+                raise HTTPException(404, f"round {bid} not found")
+            pid: Optional[str] = b["project_id"]
+            if pid is None:
+                hit = c.execute("SELECT project_id FROM comments WHERE batch_id = ? AND project_id IS NOT NULL "
+                                "LIMIT 1", (bid,)).fetchone()
+                pid = hit["project_id"] if hit else None
+            project = fa.load_project(c, pid)
+            if pid:
+                rows = c.execute("""SELECT * FROM comments WHERE batch_id = ?
+                                    AND (project_id = ? OR (project_id IS NULL AND ? = ?))
+                                    ORDER BY created_at, id""", (bid, pid, b["project_id"], pid)).fetchall()
+            else:
+                rows = c.execute("SELECT * FROM comments WHERE batch_id = ? ORDER BY created_at, id",
+                                 (bid,)).fetchall()
+            label = "Your issues" if b["kind"] == "direct" else "Round " + str(c.execute(
+                "SELECT COUNT(*) FROM batches WHERE kind = 'export' AND ingested_at <= ? "
+                "AND (project_id IS ? OR id = ?)", (b["ingested_at"], b["project_id"], bid)).fetchone()[0])
+        hints = json.loads(b["repo_hints_json"] or "{}")
+        comments = [{**dict(r), "actions": fv.actions_for(r["status"], r["recipient"])} for r in rows]
+        llm = [r for r in comments if r["recipient"] == "llm"]
+        human = [r for r in comments if r["recipient"] == "human"]
+        counts: dict = {}
+        for r in llm:
+            counts[r["status"]] = counts.get(r["status"], 0) + 1
+        needs_repo = any(r["status"] == "new" and fs.resolve_repo(project, r["page_url"], hints) is None
+                         for r in llm)
+        state = fs.round_state(counts, needs_repo, bool(b["shipped_at"]), bool(b["rereview_sent_at"]))
+        return templates.TemplateResponse("round.html", {
+            "request": request, "batch": dict(b), "project": project, "label": label,
+            "lanes": fv.lanes(llm), "human": human, "llm_count": len(llm), "state": state,
+            "state_class": fv.STATE_CLASS.get(state, "plain"), "can_ship": fs.can_ship(counts)})
+
     return router

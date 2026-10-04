@@ -84,3 +84,34 @@ def test_needs_you_strip_ignores_archived_projects(client):
         assert f'href="/comment/{cid}"' not in html
     assert "1 to confirm" in html and 'href="/comment/b"' in html
     assert "1 for you, not Claude" in html and 'href="/comment/h"' in html
+
+
+def test_round_view_lanes_humans_and_locked_ship(client):
+    _seed()
+    html = client.get("/round/r2").text
+    assert '<h2 class="mono">/products</h2>' in html and '<h2 class="mono">/</h2>' in html
+    assert "For you, not for Claude · 1" in html
+    assert re.search(r'data-action="ship"[^>]*disabled', html)
+    assert 'data-id="b" data-from="verified" data-to="done"' in html
+    assert "Send for re-review" in html and "Plan D" in html
+
+
+def test_ship_unlocks_when_every_llm_item_is_done_or_skipped(client):
+    _seed()
+    with main.db() as c:
+        c.execute("UPDATE comments SET status = 'done' WHERE id = 'b'")
+        c.execute("UPDATE comments SET status = 'skipped' WHERE id = 'c2'")
+    html = client.get("/round/r2").text
+    assert re.search(r'data-action="ship"(?![^>]*disabled)', html)
+
+
+def test_direct_stream_has_no_ship_button(client):
+    _seed()
+    bid = client.post("/api/projects/p1/issues", json={"title": "x", "page": "/"}).json()["batch_id"]
+    html = client.get(f"/round/{bid}").text
+    assert "Your issues" in html and "Standing stream" in html
+    assert 'data-action="ship"' not in html
+
+
+def test_unknown_round_is_404(client):
+    assert client.get("/round/nope").status_code == 404
