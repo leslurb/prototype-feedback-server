@@ -115,3 +115,24 @@ def test_direct_stream_has_no_ship_button(client):
 
 def test_unknown_round_is_404(client):
     assert client.get("/round/nope").status_code == 404
+
+
+def test_round_number_counts_the_rounds_own_project(client):
+    with main.db() as c:
+        c.execute("INSERT INTO projects (id, created_at, updated_at, name, repo) VALUES ('q1','t','t','alpha','r/x')")
+        c.execute("INSERT INTO projects (id, created_at, updated_at, name, repo) VALUES ('q2','t','t','beta','r/y')")
+        c.execute("INSERT INTO batches (id, ingested_at, reviewer, project, project_id, kind) "
+                  "VALUES ('x1','2026-09-01','Mike','alpha',NULL,'export')")
+        c.execute("INSERT INTO batches (id, ingested_at, reviewer, project, project_id, kind) "
+                  "VALUES ('y1','2026-09-02','Mike','beta',NULL,'export')")
+        c.execute("INSERT INTO batches (id, ingested_at, reviewer, project, project_id, kind) "
+                  "VALUES ('z1','2026-09-03','Mike',NULL,NULL,'export')")
+        c.execute("INSERT INTO comments (id, batch_id, status, recipient, project_id, page_url, comment) "
+                  "VALUES ('cx','x1','new','llm','q1','https://a.dev/','text cx')")
+        c.execute("INSERT INTO comments (id, batch_id, status, recipient, project_id, page_url, comment) "
+                  "VALUES ('cy','y1','new','llm','q2','https://b.dev/','text cy')")
+    assert "beta · Round 1" in client.get("/round/y1").text
+    assert "alpha · Round 1" in client.get("/round/x1").text
+    dash = client.get("/").text
+    assert dash.count("<strong>Round 1</strong>") == 2
+    assert "Unassigned · Round" in client.get("/round/z1").text

@@ -85,9 +85,17 @@ def make_dashboard_router(db: Callable, templates, now_iso: Callable[[], str]) -
             else:
                 rows = c.execute("SELECT * FROM comments WHERE batch_id = ? ORDER BY created_at, id",
                                  (bid,)).fetchall()
-            label = "Your issues" if b["kind"] == "direct" else "Round " + str(c.execute(
-                "SELECT COUNT(*) FROM batches WHERE kind = 'export' AND ingested_at <= ? "
-                "AND (project_id IS ? OR id = ?)", (b["ingested_at"], b["project_id"], bid)).fetchone()[0])
+            if b["kind"] == "direct":
+                label = "Your issues"
+            elif pid:
+                n = c.execute(
+                    """SELECT COUNT(*) FROM batches b WHERE b.kind = 'export' AND b.ingested_at <= ?
+                       AND (b.project_id = ? OR EXISTS (SELECT 1 FROM comments cm
+                            WHERE cm.batch_id = b.id AND cm.project_id = ?))""",
+                    (b["ingested_at"], pid, pid)).fetchone()[0]
+                label = f"Round {n}"
+            else:
+                label = "Round"
         hints = json.loads(b["repo_hints_json"] or "{}")
         comments = [{**dict(r), "actions": fv.actions_for(r["status"], r["recipient"])} for r in rows]
         llm = [r for r in comments if r["recipient"] == "llm"]
