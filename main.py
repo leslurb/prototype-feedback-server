@@ -572,7 +572,7 @@ def write_claude_artifacts(batch_id: str) -> None:
 # ---- Routes ----------------------------------------------------------------
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/batches", response_class=HTMLResponse)
 def home(request: Request):
     with db() as c:
         batches = c.execute(
@@ -595,7 +595,7 @@ def home(request: Request):
             ).fetchall()
         ]
     return templates.TemplateResponse(
-        "index.html",
+        "batches.html",
         {
             "request": request,
             "batches": batches,
