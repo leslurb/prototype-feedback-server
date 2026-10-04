@@ -7,7 +7,12 @@
   async function api(method, url, body) {
     const opt = { method, headers: { "Content-Type": "application/json" } };
     if (body !== undefined) opt.body = JSON.stringify(body);
-    const r = await fetch(url, opt);
+    let r;
+    try {
+      r = await fetch(url, opt);
+    } catch (e) {
+      return { ok: false, status: 0, json: { detail: "Server unreachable: " + e.message } };
+    }
     let json = null;
     try { json = await r.json(); } catch (e) { /* non-JSON error body */ }
     return { ok: r.ok, status: r.status, json };
@@ -21,6 +26,12 @@
     if (!d) return `HTTP ${res.status}`;
     if (typeof d === "string") return d;
     if (d.current) return `Changed elsewhere: it is now ${d.current}. Reload.`;
+    if (d.error) {
+      const counts = d.counts && typeof d.counts === "object"
+        ? Object.entries(d.counts).map(([k, v]) => `${k} ${v}`).join(", ")
+        : "";
+      return counts ? `${d.error} (${counts})` : d.error;
+    }
     return JSON.stringify(d);
   }
 
@@ -80,8 +91,19 @@
     if (t.name === "round" || (t.dataset && t.dataset.projectToggle)) refreshQueueButton();
     if (t.closest && t.closest("#new-issue")) composerChanged(t);
   });
+  function isTextLikeControl(t) {
+    if (!t) return false;
+    if (t.tagName === "TEXTAREA") return true;
+    if (t.tagName === "INPUT") {
+      const type = (t.type || "text").toLowerCase();
+      return type === "text" || type === "search" || type === "url";
+    }
+    return false;
+  }
   document.addEventListener("input", (ev) => {
-    if (ev.target.closest && ev.target.closest("#new-issue")) composerChanged(ev.target);
+    const t = ev.target;
+    if (!(t.closest && t.closest("#new-issue"))) return;
+    if (isTextLikeControl(t)) composerChanged(t);
   });
 
   // ---- click actions ----------------------------------------------------------
@@ -103,7 +125,7 @@
       const sk = res.json.skipped || [];
       say("queue", `Queued ${res.json.queued.length}`
         + (sk.length ? `, skipped ${sk.length} (${[...new Set(sk.map((s) => s.reason))].join(", ")})` : "")
-        + (copied ? " · /feedback run copied" : " · copy failed: type /feedback run"), sk.length > 0);
+        + (copied ? " · /feedback run copied" : " · copy failed: type /feedback run"), sk.length > 0 || !copied);
       setTimeout(() => location.reload(), 1500);
     } else if (a === "ship") {
       const res = await api("POST", `/api/rounds/${b.dataset.batch}/mark`, { what: "shipped" });
