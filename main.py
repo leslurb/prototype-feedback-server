@@ -56,10 +56,20 @@ app = FastAPI(title="Prototype Feedback")
 app.mount("/static", StaticFiles(directory=BUNDLE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BUNDLE_DIR / "templates")
 
-# Allow the extension popup (any chrome-extension://) to call /api/*.
+PUBLISHED_EXTENSION_ORIGIN = "chrome-extension://lkpciiloidfgdhlgaefcbggajlfljmbp"
+
+
+def cors_origins(extra: Optional[str]) -> list[str]:
+    """The published extension, plus PFB_EXTRA_ORIGINS (comma-separated, e.g. an unpacked
+    dev build's chrome-extension:// origin). The dashboard itself is same-origin."""
+    return [PUBLISHED_EXTENSION_ORIGIN] + [o.strip() for o in (extra or "").split(",") if o.strip()]
+
+
+# Only the extension may call /api/* cross-origin; every JSON POST needs a preflight,
+# which a foreign page now fails.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins(os.environ.get("PFB_EXTRA_ORIGINS")),
     allow_methods=["*"],
     allow_headers=["*"],
 )
