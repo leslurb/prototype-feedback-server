@@ -184,3 +184,12 @@ def test_composer_lists_projects_pins_and_flags_unmapped(client):
     assert 'data-ok="1"' in html
     assert re.search(r"<button[^>]*disabled[^>]*>Draft it</button>", html)
     assert 'data-ok="0"' in client.get("/new-issue?project=p2").text
+
+
+def test_project_page_has_mapping_form_with_current_values(client):
+    _seed()
+    with main.db() as c:
+        c.execute("UPDATE projects SET url_prefixes_json = ? WHERE id = 'p1'", ('["https://x.dev", "https://y.dev"]',))
+    html = client.get("/project/p1").text
+    assert 'id="mapping"' in html and 'value="r/a"' in html
+    assert "https://x.dev\nhttps://y.dev" in html

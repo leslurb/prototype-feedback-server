@@ -942,7 +942,13 @@ def project_detail(request: Request, pid: str):
     g_status = _google_status()
     return templates.TemplateResponse(
         "project.html",
-        {"request": request, "summary": summary, "comments": comments, "g_status": g_status},
+        {
+            "request": request,
+            "summary": summary,
+            "comments": comments,
+            "g_status": g_status,
+            "url_prefixes": json.loads(summary["project"]["url_prefixes_json"] if summary["project"]["url_prefixes_json"] else "[]"),
+        },
     )
 
 

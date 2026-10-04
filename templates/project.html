@@ -36,6 +36,18 @@
 </div>
 {% endif %}
 
+<h2 id="mapping">Repo mapping</h2>
+<form id="repo-mapping" class="sheet" data-project="{{ summary.project.id }}">
+  <label>Repo <input name="repo" value="{{ summary.project.repo or '' }}" placeholder="leslurb/my-prototype"></label>
+  <label>Local path <input name="local_path" value="{{ summary.project.local_path or '' }}" class="mono"></label>
+  <label>URL prefixes <span class="small muted">one per line; the target URL is always included</span>
+    <textarea name="url_prefixes" rows="3" class="mono">{{ url_prefixes|join("\n") }}</textarea></label>
+  <label>Preview command <input name="preview_cmd" value="{{ summary.project.preview_cmd or '' }}" class="mono"></label>
+  <label>Preview URL <input name="preview_url" value="{{ summary.project.preview_url or '' }}" class="mono"></label>
+  <div><button class="btn primary" type="submit">Save mapping</button> <span class="small" data-msg="mapping"></span></div>
+</form>
+<script src="/static/dashboard.js"></script>
+
 <h2>Reviewers</h2>
 
 <div class="autocomplete">
