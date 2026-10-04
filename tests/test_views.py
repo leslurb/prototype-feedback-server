@@ -34,8 +34,9 @@ def test_lanes_group_by_normalised_page_in_first_seen_order():
 def test_every_offered_action_is_one_the_server_allows(status, recipient):
     for a in fv.actions_for(status, recipient):
         assert a["from"] == status
-        human_close = recipient == "human" and (a["from"], a["to"]) == ("new", "done")
-        assert human_close or fs.can_transition(a["from"], a["to"], fs.USER), a
+        # The two human-only moves feedback_api.change_status allows outside the table.
+        human_only = recipient == "human" and (a["from"], a["to"]) in {("new", "done"), ("done", "new")}
+        assert human_only or fs.can_transition(a["from"], a["to"], fs.USER), a
         assert not (recipient == "human" and a["to"] == "queued")
 
 
@@ -46,6 +47,21 @@ def test_key_actions_present():
     assert ("new", "done") not in {(a["from"], a["to"]) for a in fv.actions_for("new", "llm")}
     assert ("doing", "queued") in {(a["from"], a["to"]) for a in fv.actions_for("doing", "llm")}
     assert ("doing", "queued") not in {(a["from"], a["to"]) for a in fv.actions_for("doing", "human")}
+
+
+def test_done_human_item_can_be_reopened_to_new_but_llm_reopens_to_queued():
+    assert {(a["from"], a["to"]) for a in fv.actions_for("done", "human")} == {("done", "new")}
+    assert {(a["from"], a["to"]) for a in fv.actions_for("done", "llm")} == {("done", "queued")}
+
+
+def test_to_et_converts_utc_iso_to_eastern():
+    assert fv.to_et("2026-10-01T14:30:00+00:00") == "2026-10-01 10:30 ET"
+    assert fv.to_et("2026-10-01T02:05:00+00:00") == "2026-09-30 22:05 ET"
+
+
+def test_to_et_tolerates_missing():
+    assert fv.to_et(None) == "—"
+    assert fv.to_et("") == "—"
 
 
 @pytest.mark.parametrize("hm,in_window", [((7, 59), False), ((8, 0), True), ((8, 44), True), ((8, 45), False),

@@ -87,3 +87,21 @@ def test_verify_write_path_is_stored_and_survives_done(client):
     with main.db() as c:
         row = c.execute("SELECT status, after_path, verified_at, verify_json FROM comments WHERE id='c1'").fetchone()
     assert tuple(row) == ("done", "batches/b1/after/c1.png", "2026-09-27T12:00:00+00:00", '{"ok": true}')
+
+
+def test_human_done_can_go_back_to_new_with_event(client):
+    _comment("done", recipient="human")
+    r = client.post("/api/comment/c1/status", json={"to": "new", "expected_from": "done", "actor": "user"})
+    assert r.status_code == 200, r.text
+    with main.db() as c:
+        assert c.execute("SELECT status FROM comments WHERE id='c1'").fetchone()[0] == "new"
+        ev = c.execute("SELECT from_status, to_status, actor FROM status_events WHERE comment_id='c1'").fetchone()
+    assert tuple(ev) == ("done", "new", "user")
+
+
+def test_llm_done_to_new_is_422(client):
+    _comment("done", recipient="llm")
+    r = client.post("/api/comment/c1/status", json={"to": "new", "expected_from": "done", "actor": "user"})
+    assert r.status_code == 422
+    with main.db() as c:
+        assert c.execute("SELECT status FROM comments WHERE id='c1'").fetchone()[0] == "done"

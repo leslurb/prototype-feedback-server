@@ -150,7 +150,11 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
         # A human-recipient comment has no "handled" state: the user closes it straight from new.
         human_close = (body.expected_from, body.to, body.actor) == ("new", "done", fs.USER) \
             and row["recipient"] == "human"
-        if body.to not in fs.STATUSES or not (human_close or fs.can_transition(body.expected_from, body.to, body.actor)):
+        # ...and undoes that close straight back to new (it is never re-queued).
+        human_reopen = (body.expected_from, body.to, body.actor) == ("done", "new", fs.USER) \
+            and row["recipient"] == "human"
+        if body.to not in fs.STATUSES or not (human_close or human_reopen
+                                              or fs.can_transition(body.expected_from, body.to, body.actor)):
             raise HTTPException(422, f"{body.actor} may not move {body.expected_from} -> {body.to}")
         if body.to == "queued" and row["recipient"] != "llm":
             raise HTTPException(422, "human-recipient comments are never queued")
@@ -316,12 +320,18 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
                     raise HTTPException(422, "no repo mapped for this page (map the project's repo, or check url_prefixes)")
             pin = None
             if body.pin_comment_id:
-                pin = c.execute("SELECT selector, bbox_json, screenshot_path, project_id FROM comments WHERE id = ?",
-                                (body.pin_comment_id,)).fetchone()
+                pin = c.execute("SELECT page_url, selector, bbox_json, screenshot_path, project_id FROM comments "
+                                "WHERE id = ?", (body.pin_comment_id,)).fetchone()
                 if pin is None:
                     raise HTTPException(404, "pin comment not found")
                 if pin["project_id"] is not None and pin["project_id"] != pid:
                     raise HTTPException(422, "pin belongs to another project")
+            repeat = None
+            if pin is not None:  # same rule as the composer's repeat check, persisted like ingest does
+                repeat = fs.classify_repeat(
+                    {"page": fs.normalize_path(pin["page_url"]), "selector": pin["selector"],
+                     "bbox": json.loads(pin["bbox_json"] or "{}")},
+                    done_priors(c, pid, exclude_id=body.pin_comment_id))
             b = c.execute("SELECT id FROM batches WHERE project_id = ? AND kind = 'direct'", (pid,)).fetchone()
             if b is None:
                 bid = str(uuid.uuid4())
@@ -333,11 +343,13 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
             text = body.title if not body.details else f"{body.title}\n\n{body.details}"
             c.execute(
                 """INSERT INTO comments (id, batch_id, created_at, page_url, comment, reviewer, project, project_id,
-                                         recipient, viewport_w, expected_result, selector, bbox_json, screenshot_path)
-                   VALUES (?, ?, ?, ?, ?, 'You', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                         recipient, viewport_w, expected_result, selector, bbox_json, screenshot_path,
+                                         repeat_of, repeat_kind)
+                   VALUES (?, ?, ?, ?, ?, 'You', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (cid, bid, now_iso(), body.page, text, project["name"], pid, body.recipient, body.viewport_w,
                  body.expected_result, pin["selector"] if pin else None,
-                 pin["bbox_json"] if pin else "{}", pin["screenshot_path"] if pin else None),
+                 pin["bbox_json"] if pin else "{}", pin["screenshot_path"] if pin else None,
+                 repeat[0] if repeat else None, repeat[1] if repeat else None),
             )
             c.execute("UPDATE batches SET comment_count = comment_count + 1 WHERE id = ?", (bid,))
             status = "new"

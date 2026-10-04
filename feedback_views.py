@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Iterable
+from typing import Iterable, Optional
+from zoneinfo import ZoneInfo
 
 import feedback_state as fs
+
+ET = ZoneInfo("America/New_York")
 
 SEG_ORDER = ("done", "verified", "doing", "queued", "new", "blocked", "skipped")
 STATE_CLASS = {
@@ -13,7 +16,8 @@ STATE_CLASS = {
     "Re-review sent": "purple", "Shipped": "plain", "Human only": "plain",
 }
 # (from, to, label, button kind). Every entry must be a move feedback_api allows for the
-# user (the human-recipient new->done close is the one rule outside the table).
+# user (the human-recipient new->done close and its done->new undo are the two rules
+# outside the table).
 ACTIONS = [
     ("verified", "done", "Looks fixed: mark Done", "primary"),
     ("verified", "queued", "Not fixed: re-queue", ""),
@@ -28,6 +32,7 @@ ACTIONS = [
     ("blocked", "queued", "Re-queue", "primary"),
     ("blocked", "skipped", "Skip", ""),
     ("done", "queued", "Reopen", ""),
+    ("done", "new", "Reopen", ""),
     ("skipped", "new", "Restore", ""),
 ]
 
@@ -64,7 +69,7 @@ def actions_for(status: str, recipient: str) -> list[dict]:
             continue
         if recipient == "human" and to == "queued":
             continue
-        if recipient != "human" and (frm, to) == ("new", "done"):
+        if recipient != "human" and (frm, to) in (("new", "done"), ("done", "new")):
             continue
         out.append({"from": frm, "to": to, "label": label, "kind": kind})
     return out
@@ -76,3 +81,13 @@ def lane_cap_note(now_et: datetime) -> str:
     if 8 * 60 <= hm < 8 * 60 + 45 or 10 * 60 <= hm < 10 * 60 + 45:
         return "1 lane now — fleet job window"
     return "3 lanes now · 1 during 08:00–08:45 and 10:00–10:45 ET"
+
+
+def to_et(iso: Optional[str]) -> str:
+    """Jinja filter `et`: an ISO timestamp as "YYYY-MM-DD HH:MM ET" (a naive value is taken as UTC)."""
+    if not iso:
+        return "—"
+    dt = datetime.fromisoformat(iso)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    return dt.astimezone(ET).strftime("%Y-%m-%d %H:%M") + " ET"

@@ -107,3 +107,20 @@ def test_url_prefixes_must_be_a_list_of_non_empty_strings(client):
     with main.db() as c:
         stored = c.execute("SELECT url_prefixes_json FROM projects WHERE id='p1'").fetchone()[0]
     assert stored == '["https://b.dev", "https://c.dev"]'
+
+
+def test_direct_issue_with_pin_persists_repeat_of_a_shipped_prior(client):
+    _project()
+    with main.db() as c:
+        c.execute("INSERT INTO batches (id, ingested_at, project_id, kind, shipped_at) "
+                  "VALUES ('old','t','p1','export','2026-09-01')")
+        c.execute("INSERT INTO batches (id, ingested_at, project_id, kind) VALUES ('cur','t','p1','export')")
+        c.execute("INSERT INTO comments (id, batch_id, project_id, status, page_url, selector, bbox_json) "
+                  "VALUES ('prior','old','p1','done','https://x.dev/','footer img','{}')")
+        c.execute("INSERT INTO comments (id, batch_id, project_id, status, page_url, selector, bbox_json) "
+                  "VALUES ('pin','cur','p1','new','https://x.dev/','footer img','{}')")
+    body = {"title": "logo gone again", "page": "/", "recipient": "llm", "pin_comment_id": "pin"}
+    cid = client.post("/api/projects/p1/issues", json=body).json()["id"]
+    with main.db() as c:
+        row = c.execute("SELECT repeat_of, repeat_kind FROM comments WHERE id = ?", (cid,)).fetchone()
+    assert tuple(row) == ("prior", "regression")
