@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -246,6 +247,15 @@ def write_b64(b64: str, out_path: Path) -> None:
     out_path.write_bytes(base64.b64decode(b64))
 
 
+SCREENSHOT_EXTS = {".png", ".webp", ".jpg", ".jpeg"}
+
+
+def _screenshot_ext(src: Path) -> str:
+    """Keep the source file's image suffix; anything unknown is stored as .png."""
+    suffix = src.suffix.lower()
+    return suffix if suffix in SCREENSHOT_EXTS else ".png"
+
+
 KIND_ICON = {
     "google_doc": "📄", "google_sheet": "📊", "google_slide": "📑",
     "google_form": "📝", "google_docs": "📁", "google_drive": "🗂",
@@ -290,14 +300,25 @@ def _parse_page_url(url: Optional[str]) -> tuple[str, str, bool]:
         return url, "", False
 
 
-def _file_to_data_url(rel_path: Optional[str], mime: str = "image/png") -> Optional[str]:
+IMAGE_MIMES = {".png": "image/png", ".webp": "image/webp", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+
+
+def _mime_for(path: Path) -> str:
+    """Content-Type from the suffix: known image types first, then mimetypes, then octet-stream."""
+    suffix = path.suffix.lower()
+    if suffix in IMAGE_MIMES:
+        return IMAGE_MIMES[suffix]
+    return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+
+def _file_to_data_url(rel_path: Optional[str], mime: Optional[str] = None) -> Optional[str]:
     if not rel_path:
         return None
     p = DATA / rel_path
     if not p.exists():
         return None
     b64 = base64.b64encode(p.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{b64}"
+    return f"data:{mime or _mime_for(p)};base64,{b64}"
 
 
 def now_iso() -> str:
@@ -402,7 +423,7 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                     if not str(src).startswith(str(source_dir.resolve())):
                         raise HTTPException(400, f"screenshot_path escapes archive: {cm['screenshot_path']}")
                     if src.exists():
-                        rel = f"batches/{batch_id}/screenshots/{cid}.png"
+                        rel = f"batches/{batch_id}/screenshots/{cid}{_screenshot_ext(src)}"
                         dst = DATA / rel
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(src, dst)
@@ -419,7 +440,7 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                     if not str(src).startswith(str(source_dir.resolve())):
                         raise HTTPException(400, f"viewport_screenshot_path escapes archive: {cm['viewport_screenshot_path']}")
                     if src.exists():
-                        rel = f"batches/{batch_id}/viewport-screenshots/{cid}.png"
+                        rel = f"batches/{batch_id}/viewport-screenshots/{cid}{_screenshot_ext(src)}"
                         dst = DATA / rel
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(src, dst)
@@ -787,7 +808,7 @@ def serve_file(path: str):
         raise HTTPException(403)
     if not p.exists():
         raise HTTPException(404)
-    return FileResponse(p)
+    return FileResponse(p, media_type=_mime_for(p))
 
 
 @app.post("/api/ingest")
