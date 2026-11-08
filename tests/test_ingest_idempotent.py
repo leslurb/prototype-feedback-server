@@ -80,3 +80,9 @@ def test_failed_ingest_removes_its_batch_dir(tmp_data_dir):
         main.ingest_payload_ex(bad, "bad.zip", source_dir=tmp_data_dir / "nonexistent-src")
     assert set((tmp_data_dir / "batches").iterdir()) == before
     assert _batches() == []
+
+
+def test_empty_export_still_creates_a_batch():
+    res = main.ingest_payload_ex(_p(), "empty.zip")
+    assert isinstance(res["batch_id"], str) and res["new"] == 0
+    assert [b["comment_count"] for b in _batches()] == [0]

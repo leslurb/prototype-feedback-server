@@ -342,7 +342,7 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                           (cm.get("comment"), cm["edited_at"], now_iso(), cm["id"]))
                 updated += 1
     new_comments = [cm for cm in comments if cm.get("id") not in known_rows]
-    if not new_comments:
+    if comments and not new_comments:
         first_known = known_rows[incoming_ids[0]]["batch_id"] if known_rows else None
         return {"batch_id": first_known, "new": 0, "known": len(known_rows), "updated": updated}
 
