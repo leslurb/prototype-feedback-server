@@ -55,7 +55,7 @@ def test_claude_json_route_reflects_current_status(client, tmp_data_dir):
     with main.db() as c:
         c.execute("UPDATE comments SET status='done' WHERE id='s1'")
     doc = client.get(f"/batch/{bid}/json").json()
-    assert doc["comments"][0]["status"] == "done"
+    assert doc["comments"] == [] and doc["already_handled"] == [{"id": "s1", "server_status": "done"}]
     assert client.get("/batch/nope/json").status_code == 404
 
 
@@ -129,3 +129,51 @@ def test_fallback_guide_has_no_png_claim_and_mentions_return_path(client, tmp_da
     ref = json.dumps(doc["_llm_guide"]["field_reference"])
     assert "a PNG" not in ref and "WebP" in ref
     assert any("responses.json" in s for s in doc["_llm_guide"]["how_to_apply"])
+
+def _ingest_c(client, comments, extra=None, files=None):
+    payload = {"schema": "prototype-feedback/v6", "reviewer": "R", "comments": comments, **(extra or {})}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("feedback.json", json.dumps(payload))
+        for name, data in (files or {}).items():
+            z.writestr(name, data)
+    res = client.post("/api/ingest", files={"files": ("r.zip", buf.getvalue(), "application/zip")}).json()
+    assert res["results"][0]["ok"], res
+    return res["results"][0]["batch_id"]
+
+
+def _doc(tmp_data_dir, bid):
+    return json.loads((tmp_data_dir / "batches" / bid / "claude_input.json").read_text(encoding="utf-8"))
+
+
+def _cm(cid, **kw):
+    base = {"id": cid, "page_url": "https://a.dev/", "selector": "h1", "bbox": {}, "viewport": {"w": 1},
+            "comment": "t", "created_at": "2026-11-01T10:00:00Z", "round": 1,
+            "status": {"state": "fixed", "at": "2026-11-02T00:00:00Z"}}
+    base.update(kw)
+    return base
+
+
+def test_requeued_comment_alone_is_listed_and_verified_ones_are_already_handled(client, tmp_data_dir):
+    bid = _ingest_c(client, [_cm("a"), _cm("b"), _cm("c"), _cm("d")], {"export_kind": "send_claude_code"})
+    with main.db() as c:
+        c.execute("UPDATE comments SET status='queued' WHERE id='a'")
+        c.execute("UPDATE comments SET status='verified' WHERE id='b'")
+        c.execute("UPDATE comments SET status='done' WHERE id='c'")
+        c.execute("UPDATE comments SET status='doing' WHERE id='d'")
+    main.write_claude_artifacts(bid)
+    doc = _doc(tmp_data_dir, bid)
+    assert sorted(cm["id"] for cm in doc["comments"]) == ["a", "d"]
+    assert doc["comment_count"] == 2
+    assert sorted(doc["already_handled"], key=lambda x: x["id"]) == [
+        {"id": "b", "server_status": "verified"}, {"id": "c", "server_status": "done"}]
+    pre = " ".join(doc["_server_preamble"])
+    assert ("server_status is authoritative: work only on comments listed in comments[]; "
+            "ignore any status.state or delta wording in the embedded guide.") in pre
+    prompt = (tmp_data_dir / "batches" / bid / "claude_prompt.md").read_text(encoding="utf-8")
+    assert "server_status is authoritative" in prompt
+
+
+def test_already_handled_is_empty_when_every_comment_is_open(client, tmp_data_dir):
+    bid = _ingest_c(client, [_cm("a")])
+    assert _doc(tmp_data_dir, bid)["already_handled"] == []

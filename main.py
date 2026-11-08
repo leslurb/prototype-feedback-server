@@ -646,6 +646,7 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
     return ingest_payload_ex(payload, source_filename, source_dir)["batch_id"]
 
 
+OPEN_STATUSES = ("new", "queued", "doing")  # the only server_status values an agent works on
 RETURN_CMD = "curl -F file=@responses.json http://127.0.0.1:8090/api/responses"
 PRECEDENCE = ("If you are running the pfb plugin's /pfb:feedback skill, its steps win over this guide. "
               "Otherwise follow this guide.")
@@ -657,6 +658,8 @@ SERVER_PREAMBLE = [
     "Ask the reviewer (status needs_input with one question_back) only for a product, copy or visual "
     "preference only the reviewer can give, or when the intent is unclear after reading the text, "
     "screenshot, element_snapshot and history.",
+    "server_status is authoritative: work only on comments listed in comments[]; "
+    "ignore any status.state or delta wording in the embedded guide.",
     "Return path: write responses.json next to claude_input.json, then run: " + RETURN_CMD
     + " . The server applies each status to the known comment ids. If round_note.reviewer_is_developer "
     "is false, also give responses.json back to the reviewer for Import status in the extension.",
@@ -708,7 +711,11 @@ def write_claude_artifacts(batch_id: str) -> None:
         )
 
     comments = []
+    already_handled = []
     for r in rows:
+        if r["status"] not in OPEN_STATUSES:
+            already_handled.append({"id": r["id"], "server_status": r["status"]})
+            continue
         s = src_by_id.get(r["id"], {})
         embedded_status = _loads(r["status_json"])
         extra = _loads(r["v6_extra_json"]) or {}
@@ -758,6 +765,7 @@ def write_claude_artifacts(batch_id: str) -> None:
         "version_hints": src.get("version_hints") or {},
         "comment_count": len(comments),
         **{k: meta.get(k) for k in V6_TOP_KEYS},
+        "already_handled": already_handled,
         "_server_preamble": SERVER_PREAMBLE,
         "_llm_guide": own_guide if own_guide is not None else {
             "purpose": "Pinned feedback from a reviewer. Each comment is anchored to a DOM element OR viewport region with a cropped screenshot. Apply the changes the reviewer requests.",
