@@ -849,6 +849,7 @@ def delete_comment(comment_id: str):
 
 @app.get("/batch/{batch_id}/claude", response_class=PlainTextResponse)
 def batch_claude_prompt(batch_id: str):
+    write_claude_artifacts(batch_id)
     p = BATCHES / batch_id / "claude_prompt.md"
     if not p.exists():
         raise HTTPException(404, "Claude prompt not generated yet for this batch.")
@@ -857,6 +858,7 @@ def batch_claude_prompt(batch_id: str):
 
 @app.get("/batch/{batch_id}/json")
 def batch_claude_json(batch_id: str):
+    write_claude_artifacts(batch_id)
     p = BATCHES / batch_id / "claude_input.json"
     if not p.exists():
         raise HTTPException(404)

@@ -44,3 +44,13 @@ def test_claude_input_without_feedback_json_still_writes(tmp_data_dir):
         {"id": "z", "page_url": "https://a.dev/", "comment": "x", "bbox": {}, "viewport": {}}]}, "old.json")
     doc = json.loads((tmp_data_dir / "batches" / bid / "claude_input.json").read_text(encoding="utf-8"))
     assert doc["comments"][0]["intent"] is None and doc["comments"][0]["status"] == "new"
+
+
+def test_claude_json_route_reflects_current_status(client, tmp_data_dir):
+    bid = main.ingest_payload({"schema": "prototype-feedback/v5", "comments": [
+        {"id": "s1", "page_url": "https://a.dev/", "comment": "x", "bbox": {}, "viewport": {}}]}, "s.json")
+    with main.db() as c:
+        c.execute("UPDATE comments SET status='done' WHERE id='s1'")
+    doc = client.get(f"/batch/{bid}/json").json()
+    assert doc["comments"][0]["status"] == "done"
+    assert client.get("/batch/nope/json").status_code == 404
