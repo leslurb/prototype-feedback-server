@@ -307,6 +307,15 @@ def now_iso() -> str:
 # ---- Ingest ----------------------------------------------------------------
 
 
+def _normalise_recipient(value, cid) -> str:
+    recipient = str(value or "llm").strip().lower()
+    if recipient not in ("llm", "human"):
+        print(f"warning: comment {cid}: unknown recipient_resolved "
+              f"{value!r}, using 'llm'", file=sys.stderr)
+        recipient = "llm"
+    return recipient
+
+
 def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[Path] = None) -> dict:
     """Insert a batch for the comments this server has not seen; update known ones in place.
 
@@ -330,7 +339,7 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
     with db() as c:
         known_rows = {
             r["id"]: r for r in c.execute(
-                f"SELECT id, batch_id, edited_at FROM comments WHERE id IN ({','.join('?' * len(incoming_ids))})",
+                f"SELECT id, batch_id, edited_at, status, recipient FROM comments WHERE id IN ({','.join('?' * len(incoming_ids))})",
                 incoming_ids,
             )
         } if incoming_ids else {}
@@ -338,8 +347,11 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
         for cm in comments:
             row = known_rows.get(cm.get("id"))
             if row and cm.get("edited_at") and (row["edited_at"] or "") < cm["edited_at"]:
-                c.execute("UPDATE comments SET comment = ?, edited_at = ?, updated_at = ? WHERE id = ?",
-                          (cm.get("comment"), cm["edited_at"], now_iso(), cm["id"]))
+                # intent/severity/attachment edits on known comments are not applied (no columns).
+                recipient = (_normalise_recipient(cm.get("recipient_resolved"), cm["id"])
+                             if row["status"] == "new" else row["recipient"])
+                c.execute("UPDATE comments SET comment = ?, edited_at = ?, recipient = ?, updated_at = ? WHERE id = ?",
+                          (cm.get("comment"), cm["edited_at"], recipient, now_iso(), cm["id"]))
                 updated += 1
     new_comments = [cm for cm in comments if cm.get("id") not in known_rows]
     if comments and not new_comments:
@@ -430,11 +442,7 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                         project_id = hits[0]["project_id"]
 
                 comment_project_ids.add(project_id)
-                recipient = str(cm.get("recipient_resolved") or "llm").strip().lower()
-                if recipient not in ("llm", "human"):
-                    print(f"warning: comment {cid}: unknown recipient_resolved "
-                          f"{cm.get('recipient_resolved')!r}, using 'llm'", file=sys.stderr)
-                    recipient = "llm"
+                recipient = _normalise_recipient(cm.get("recipient_resolved"), cid)
                 viewport_w = (cm.get("viewport") or {}).get("w")
                 repeat = None
                 if project_id:

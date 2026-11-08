@@ -86,3 +86,17 @@ def test_empty_export_still_creates_a_batch():
     res = main.ingest_payload_ex(_p(), "empty.zip")
     assert isinstance(res["batch_id"], str) and res["new"] == 0
     assert [b["comment_count"] for b in _batches()] == [0]
+
+
+def test_newer_edit_carries_recipient_while_new_only():
+    a = _c("a", "q", "2026-11-02T00:00:00Z"); a["recipient_resolved"] = "llm"
+    b = _c("b", "q", "2026-11-02T00:00:00Z"); b["recipient_resolved"] = "llm"
+    main.ingest_payload_ex(_p(a, b), "r1.zip")
+    with main.db() as c:
+        c.execute("UPDATE comments SET status='queued' WHERE id='b'")
+    a2 = dict(a, edited_at="2026-11-03T00:00:00Z", recipient_resolved="human")
+    b2 = dict(b, edited_at="2026-11-03T00:00:00Z", recipient_resolved="human")
+    main.ingest_payload_ex(_p(a2, b2), "r2.zip")
+    with main.db() as c:
+        rec = {r["id"]: r["recipient"] for r in c.execute("SELECT id, recipient FROM comments")}
+    assert rec == {"a": "human", "b": "llm"}
