@@ -338,7 +338,7 @@ def _normalise_recipient(value, cid) -> str:
 
 
 RESET_KINDS = ("reopen", "reply", "do_it", "edit")
-V6_TOP_KEYS = ("round_note", "repo", "session", "prior_commits", "export_kind")
+V6_TOP_KEYS = ("round_note", "repo", "session", "prior_commits", "export_kind", "delta")
 
 
 def _v6_cols(cm: dict) -> dict:
@@ -682,6 +682,8 @@ SERVER_PREAMBLE = [
     "Ask the reviewer (status needs_input with one question_back) only for a product, copy or visual "
     "preference only the reviewer can give, or when the intent is unclear after reading the text, "
     "screenshot, element_snapshot and history.",
+    "In this guide, feedback.json means this file: this file is the server's copy of feedback.json, "
+    "with the same field names, limited to the comments that still need work.",
     "server_status is authoritative: work only on comments listed in comments[]; "
     "ignore any status.state or delta wording in the embedded guide.",
     "Return path: write responses.json next to claude_input.json, then run: " + RETURN_CMD
@@ -727,7 +729,8 @@ def write_claude_artifacts(batch_id: str) -> None:
                 "name": a["name"],
                 "mime": a["mime"],
                 "size": a["size"],
-                "file_path": absolute(a["data_path"]),
+                "path": absolute(a["data_path"]),
+                "file_path": absolute(a["data_path"]),  # old name, kept for one release
                 "url": a["url"],
                 "kind": a["kind"],
                 "title": a["title"],
@@ -766,10 +769,13 @@ def write_claude_artifacts(batch_id: str) -> None:
                 "region_type": r["region_type"],
                 "selector": r["selector"],
                 "bbox": json.loads(r["bbox_json"] or "{}"),
-                "screenshot_file": absolute(r["screenshot_path"]),
+                "screenshot_path": absolute(r["screenshot_path"]),
+                "viewport_screenshot_path": absolute(r["viewport_path"]),
+                "screenshot_file": absolute(r["screenshot_path"]),  # old names, kept for one release
                 "viewport_file": absolute(r["viewport_path"]),
                 "comment": r["comment"],
                 "recipient": r["recipient"],
+                "recipient_resolved": r["recipient"],
                 # v6 exports carry their own status object (state/at); the work-queue
                 # status is then only in server_status.
                 "status": embedded_status if embedded_status is not None else r["status"],
@@ -788,6 +794,10 @@ def write_claude_artifacts(batch_id: str) -> None:
             }
         )
 
+    page_index: dict[str, list] = {}
+    for cm in comments:
+        page_index.setdefault(cm["page_url"], []).append(cm["id"])
+
     meta = _loads(b["export_meta_json"]) or {}
     out_dir = BATCHES / batch_id
     out_abs = out_dir.resolve().as_posix()
@@ -801,6 +811,8 @@ def write_claude_artifacts(batch_id: str) -> None:
         "version_hints": src.get("version_hints") or {},
         "comment_count": len(comments),
         **{k: meta.get(k) for k in V6_TOP_KEYS},
+        "page_index": page_index,
+        **{k: src[k] for k in ("framework_hints", "console_log", "network_log") if src.get(k) is not None},
         "already_handled": already_handled,
         "_server_preamble": SERVER_PREAMBLE,
         "_llm_guide": own_guide if own_guide is not None else {

@@ -205,3 +205,32 @@ def test_history_screenshot_path_escaping_the_archive_is_rejected(client, tmp_da
         z.writestr("feedback.json", json.dumps(payload))
     res = client.post("/api/ingest", files={"files": ("r.zip", buf.getvalue(), "application/zip")}).json()
     assert not res["results"][0]["ok"]
+
+
+def test_claude_input_uses_the_guides_field_names_and_keeps_the_old_ones(client, tmp_data_dir):
+    import os
+    extra = {"delta": True, "export_kind": "send_claude_code",
+             "framework_hints": {"a.dev": {"stack": "next", "detected_via": "meta"}},
+             "console_log": [{"ts": "t", "level": "error", "kind": "js", "message": "boom"}],
+             "network_log": [{"ts": "t", "level": "error", "kind": "fetch", "method": "GET", "url": "/x", "status": 500}]}
+    bid = _ingest_c(client, [_cm("a", screenshot_path="screenshots/a.webp", viewport_screenshot_path="vp/a.webp",
+                                 recipient_resolved="human", attachments=[{"type": "image", "name": "x.png", "path": "att/x.png"}]),
+                             _cm("b", page_url="https://a.dev/other"), _cm("c")],
+                    extra, files={"screenshots/a.webp": b"S", "vp/a.webp": b"V", "att/x.png": b"A"})
+    doc = _doc(tmp_data_dir, bid)
+    assert doc["delta"] is True
+    assert doc["framework_hints"] == extra["framework_hints"]
+    assert doc["console_log"] == extra["console_log"] and doc["network_log"] == extra["network_log"]
+    assert doc["page_index"] == {"https://a.dev/": ["a", "c"], "https://a.dev/other": ["b"]}
+    a = next(cm for cm in doc["comments"] if cm["id"] == "a")
+    for new, old in (("screenshot_path", "screenshot_file"), ("viewport_screenshot_path", "viewport_file")):
+        assert os.path.isabs(a[new]) and a[new] == a[old] and os.path.exists(a[new])
+    at = a["attachments"][0]
+    assert os.path.isabs(at["path"]) and at["path"] == at["file_path"] and os.path.exists(at["path"])
+    assert a["recipient_resolved"] == "human" and a["recipient"] == "human"
+    assert "this file is the server's copy of feedback.json" in " ".join(doc["_server_preamble"])
+
+
+def test_optional_logs_are_omitted_when_the_export_has_none(client, tmp_data_dir):
+    doc = _doc(tmp_data_dir, _ingest_c(client, [_cm("a")]))
+    assert "console_log" not in doc and "network_log" not in doc and "framework_hints" not in doc
