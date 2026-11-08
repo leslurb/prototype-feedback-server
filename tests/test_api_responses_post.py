@@ -26,7 +26,7 @@ def _post(client, responses, schema="prototype-feedback-response/v2"):
 def test_fixed_on_doing_becomes_verified_with_commit_and_drain_actor(client):
     _seed([("a", "doing", "llm")])
     r = _post(client, [{"comment_id": "a", "status": "fixed", "summary": "done it", "commit_sha": "abc"}])
-    assert r.json() == {"matched": 1, "unmatched": 0, "applied": 1, "rejected": []}
+    assert r.json() == {"matched": 1, "unmatched": 0, "applied": 1, "unchanged": 0, "rejected": []}
     st, ev = _state("a")
     assert st == ("verified", "done it", "abc") and ev == [("doing", "verified", "drain")]
 
@@ -114,15 +114,15 @@ def test_unknown_ids_are_counted_not_errors(client):
     _seed([("a", "doing", "llm")])
     r = _post(client, [{"comment_id": "ghost", "status": "fixed"}, {"comment_id": "a", "status": "fixed"}])
     assert r.status_code == 200
-    assert r.json() == {"matched": 1, "unmatched": 1, "applied": 1, "rejected": []}
+    assert r.json() == {"matched": 1, "unmatched": 1, "applied": 1, "unchanged": 0, "rejected": []}
 
 
 def test_transition_rules_are_respected_with_reasons(client):
     _seed([("dn", "done", "llm"), ("sk", "skipped", "llm"), ("v", "verified", "llm")])
     r = _post(client, [{"comment_id": "dn", "status": "fixed"}, {"comment_id": "sk", "status": "fixed"},
                        {"comment_id": "v", "status": "fixed"}, {"comment_id": "v", "status": "weird"}]).json()
-    assert r["matched"] == 4 and r["applied"] == 0
-    assert {x["id"] for x in r["rejected"]} == {"dn", "sk", "v"} and len(r["rejected"]) == 4
+    assert r["matched"] == 4 and r["applied"] == 0 and r["unchanged"] == 1
+    assert {x["id"] for x in r["rejected"]} == {"dn", "sk", "v"} and len(r["rejected"]) == 3
     assert all(x["reason"] for x in r["rejected"])
     assert _state("dn")[0][0] == "done" and _state("sk")[0][0] == "skipped"
 
@@ -152,3 +152,12 @@ def test_cross_site_browser_write_still_refused(client):
     r = client.post("/api/responses", json={"schema": "prototype-feedback-response/v2", "responses": []},
                     headers={"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"})
     assert r.status_code == 403
+
+
+def test_repeat_response_for_a_comment_already_in_target_is_unchanged(client):
+    _seed([("a", "doing", "llm")])
+    first = _post(client, [{"comment_id": "a", "status": "fixed", "summary": "s"}]).json()
+    assert first["applied"] == 1
+    again = _post(client, [{"comment_id": "a", "status": "fixed", "summary": "s"}]).json()
+    assert again == {"matched": 1, "unmatched": 0, "applied": 0, "unchanged": 1, "rejected": []}
+    assert len(_state("a")[1]) == 1  # no second status event

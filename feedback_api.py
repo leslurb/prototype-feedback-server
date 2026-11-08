@@ -459,9 +459,10 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
                              (pid,)).fetchall()
         return build_responses(rows, None, now_iso())
 
-    def apply_response(c, entry: dict, row) -> None:
+    def apply_response(c, entry: dict, row) -> str:
         """Walk one comment to the status an agent response implies; every hop goes through
-        change_status so status_events tell the truth. Raises HTTPException(422) with the reason."""
+        change_status so status_events tell the truth. Returns "applied" or "unchanged" (already in the
+        target status: idempotent repeat). Raises HTTPException(422) with the reason."""
         status = entry.get("status")
         target = RESPONSE_TARGET.get(status) if isinstance(status, str) else None
         if target is None:
@@ -478,9 +479,9 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
             if status != "answered":
                 raise HTTPException(422, "human-recipient comments accept only 'answered'")
             c.execute("UPDATE comments SET status_note = ?, updated_at = ? WHERE id = ?", (note, now_iso(), cid))
-            return
+            return "applied"
         if cur == target:
-            raise HTTPException(422, f"already {cur}")
+            return "unchanged"
         if cur in ("done", "skipped"):
             raise HTTPException(422, f"comment is {cur}; reopen it before an agent response applies")
         if cur == "verified" and target != "blocked":
@@ -501,6 +502,7 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
             change_status(c, cid, StatusChange(to=to, expected_from=frm, actor=actor, note=hop_note,
                                                commit_sha=sha if last and to == "verified" else None))
             frm = to
+        return "applied"
 
     @router.post("/api/responses")
     async def api_responses(request: Request):
@@ -520,7 +522,7 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
         entries = doc.get("responses")
         if not isinstance(entries, list):
             raise HTTPException(400, "responses must be an array")
-        matched = unmatched = applied = 0
+        matched = unmatched = applied = unchanged = 0
         rejected = []
         with db() as c:
             for entry in entries:
@@ -531,12 +533,15 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
                     continue
                 matched += 1
                 try:
-                    apply_response(c, entry, row)
-                    applied += 1
+                    if apply_response(c, entry, row) == "unchanged":
+                        unchanged += 1
+                    else:
+                        applied += 1
                 except HTTPException as e:
                     detail = e.detail if isinstance(e.detail, str) else json.dumps(e.detail)
                     rejected.append({"id": cid, "reason": detail})
-        return {"matched": matched, "unmatched": unmatched, "applied": applied, "rejected": rejected}
+        return {"matched": matched, "unmatched": unmatched, "applied": applied, "unchanged": unchanged,
+                "rejected": rejected}
 
     router.change_status = change_status  # reused by later endpoints in this module
     return router
