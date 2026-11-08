@@ -246,6 +246,15 @@ def write_b64(b64: str, out_path: Path) -> None:
     out_path.write_bytes(base64.b64decode(b64))
 
 
+SCREENSHOT_EXTS = {".png", ".webp", ".jpg", ".jpeg"}
+
+
+def _screenshot_ext(src: Path) -> str:
+    """Keep the source file's image suffix; anything unknown is stored as .png."""
+    suffix = src.suffix.lower()
+    return suffix if suffix in SCREENSHOT_EXTS else ".png"
+
+
 KIND_ICON = {
     "google_doc": "📄", "google_sheet": "📊", "google_slide": "📑",
     "google_form": "📝", "google_docs": "📁", "google_drive": "🗂",
@@ -402,7 +411,7 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                     if not str(src).startswith(str(source_dir.resolve())):
                         raise HTTPException(400, f"screenshot_path escapes archive: {cm['screenshot_path']}")
                     if src.exists():
-                        rel = f"batches/{batch_id}/screenshots/{cid}.png"
+                        rel = f"batches/{batch_id}/screenshots/{cid}{_screenshot_ext(src)}"
                         dst = DATA / rel
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(src, dst)
@@ -419,7 +428,7 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                     if not str(src).startswith(str(source_dir.resolve())):
                         raise HTTPException(400, f"viewport_screenshot_path escapes archive: {cm['viewport_screenshot_path']}")
                     if src.exists():
-                        rel = f"batches/{batch_id}/viewport-screenshots/{cid}.png"
+                        rel = f"batches/{batch_id}/viewport-screenshots/{cid}{_screenshot_ext(src)}"
                         dst = DATA / rel
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(src, dst)
