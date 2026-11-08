@@ -307,11 +307,16 @@ def now_iso() -> str:
 # ---- Ingest ----------------------------------------------------------------
 
 
-def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Path] = None) -> str:
-    """Insert a batch + its comments + attachments. Returns batch_id.
+def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[Path] = None) -> dict:
+    """Insert a batch for the comments this server has not seen; update known ones in place.
+
+    Returns {"batch_id", "new", "known", "updated"}. Comment IDs are stable across re-exports,
+    so a known ID keeps its batch and server status; only its text is refreshed, and only
+    when the incoming edited_at is newer. If every comment is known, no batch is created and
+    batch_id is the batch of the first known comment.
 
     For v1/v2 payloads, screenshots/attachments come from inline base64.
-    For v3 payloads, they come from files inside source_dir (the unzipped temp dir).
+    For v3+ payloads, they come from files inside source_dir (the unzipped temp dir).
     """
     if not isinstance(payload, dict) or "comments" not in payload:
         raise HTTPException(400, "JSON missing 'comments' array")
@@ -319,6 +324,27 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
     schema = payload.get("schema") or "unknown"
     if not str(schema).startswith("prototype-feedback/"):
         raise HTTPException(400, f"Unsupported schema: {schema}")
+
+    comments = payload.get("comments", []) or []
+    incoming_ids = [cm.get("id") for cm in comments if cm.get("id")]
+    with db() as c:
+        known_rows = {
+            r["id"]: r for r in c.execute(
+                f"SELECT id, batch_id, edited_at FROM comments WHERE id IN ({','.join('?' * len(incoming_ids))})",
+                incoming_ids,
+            )
+        } if incoming_ids else {}
+        updated = 0
+        for cm in comments:
+            row = known_rows.get(cm.get("id"))
+            if row and cm.get("edited_at") and (row["edited_at"] or "") < cm["edited_at"]:
+                c.execute("UPDATE comments SET comment = ?, edited_at = ?, updated_at = ? WHERE id = ?",
+                          (cm.get("comment"), cm["edited_at"], now_iso(), cm["id"]))
+                updated += 1
+    new_comments = [cm for cm in comments if cm.get("id") not in known_rows]
+    if not new_comments:
+        first_known = known_rows[incoming_ids[0]]["batch_id"] if known_rows else None
+        return {"batch_id": first_known, "new": 0, "known": len(known_rows), "updated": updated}
 
     batch_id = str(uuid.uuid4())
     batch_dir = BATCHES / batch_id
@@ -330,8 +356,6 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
         src_json = source_dir / "feedback.json"
         if src_json.exists():
             shutil.copyfile(src_json, batch_dir / "feedback.json")
-
-    comments = payload.get("comments", []) or []
 
     with db() as c:
         c.execute(
@@ -348,14 +372,14 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
                 payload.get("reviewer"),
                 payload.get("project"),
                 source_filename,
-                len(comments),
+                len(new_comments),
                 json.dumps(payload.get("repo_hints") or {}),
                 payload.get("project_id"),
             ),
         )
 
         comment_project_ids = set()
-        for cm in comments:
+        for cm in new_comments:
             cid = cm.get("id") or str(uuid.uuid4())
             screenshot_path = None
 
@@ -505,7 +529,12 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
 
     # Write a slim "claude_input.json" + "claude_prompt.md" per batch.
     write_claude_artifacts(batch_id)
-    return batch_id
+    return {"batch_id": batch_id, "new": len(new_comments), "known": len(known_rows), "updated": updated}
+
+
+def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Path] = None) -> str:
+    """Backward-compatible wrapper: returns only the batch id."""
+    return ingest_payload_ex(payload, source_filename, source_dir)["batch_id"]
 
 
 def write_claude_artifacts(batch_id: str) -> None:
@@ -743,11 +772,11 @@ async def api_ingest(files: list[UploadFile] = File(...)):
                     if not fj.exists():
                         raise HTTPException(400, "ZIP missing feedback.json at root")
                     payload = json.loads(fj.read_text(encoding="utf-8"))
-                    batch_id = ingest_payload(payload, fname, source_dir=tmp)
+                    res = ingest_payload_ex(payload, fname, source_dir=tmp)
             else:
                 payload = json.loads(raw.decode("utf-8"))
-                batch_id = ingest_payload(payload, fname)
-            results.append({"ok": True, "batch_id": batch_id, "filename": fname})
+                res = ingest_payload_ex(payload, fname)
+            results.append({"ok": True, "filename": fname, **res})
         except HTTPException as e:
             results.append({"ok": False, "error": e.detail, "filename": f.filename})
         except Exception as e:
