@@ -560,6 +560,15 @@ def write_claude_artifacts(batch_id: str) -> None:
             (batch_id,),
         ).fetchall()
 
+    src_path = BATCHES / batch_id / "feedback.json"
+    try:
+        src = json.loads(src_path.read_text(encoding="utf-8")) if src_path.exists() else {}
+    except (OSError, ValueError) as e:
+        print(f"warning: batch {batch_id}: unreadable feedback.json ({e}); v5 fields omitted", file=sys.stderr)
+        src = {}
+    src_by_id = {cm.get("id"): cm for cm in src.get("comments") or [] if isinstance(cm, dict)}
+    V5_FIELDS = ("intent", "severity", "element_snapshot", "version_hint", "framework_hint", "sort_index")
+
     atts_by_comment: dict[str, list[dict]] = {}
     for a in att_rows:
         atts_by_comment.setdefault(a["comment_id"], []).append(
@@ -577,6 +586,7 @@ def write_claude_artifacts(batch_id: str) -> None:
 
     comments = []
     for r in rows:
+        s = src_by_id.get(r["id"], {})
         comments.append(
             {
                 "id": r["id"],
@@ -589,32 +599,47 @@ def write_claude_artifacts(batch_id: str) -> None:
                 "selector": r["selector"],
                 "bbox": json.loads(r["bbox_json"] or "{}"),
                 "screenshot_file": r["screenshot_path"],
+                "viewport_file": r["viewport_path"],
                 "comment": r["comment"],
+                "recipient": r["recipient"],
+                "status": r["status"],
+                "expected_result": r["expected_result"],
+                **{k: s.get(k) for k in V5_FIELDS},
                 "attachments": atts_by_comment.get(r["id"], []),
             }
         )
 
     payload = {
-        "schema": "prototype-feedback/v2-slim",
+        "schema": "prototype-feedback/v5-slim",
         "exported_at": b["exported_at"],
         "reviewer": b["reviewer"],
         "project": b["project"],
+        "repo_hints": src.get("repo_hints") or json.loads(b["repo_hints_json"] or "{}"),
+        "version_hints": src.get("version_hints") or {},
         "comment_count": len(comments),
         "_llm_guide": {
-            "purpose": "Pinned feedback from a human reviewer. Each comment is anchored to a DOM element OR viewport region with a cropped screenshot. Apply the changes the reviewer requests.",
+            "purpose": "Pinned feedback from a reviewer. Each comment is anchored to a DOM element OR viewport region with a cropped screenshot. Apply the changes the reviewer requests.",
             "how_to_apply": [
-                "Iterate comments[] in order.",
-                "For each comment, view screenshot_file (PNG cropped to bbox at the reviewer's devicePixelRatio) using the Read tool to see exactly what the reviewer was looking at.",
-                "Locate the source file from page_url (ask the user if uncertain) and find the element via selector. The selector was valid at capture time; if it no longer matches, fall back to nearby visible text from the screenshot.",
-                "For region_type='region' there is no selector; use bbox + screenshot to identify the target element(s).",
-                "For attachments: type='image' or 'file' has file_path -- Read it; type='link' has url -- WebFetch it (Google Docs/Drive may require auth).",
-                "Do not silently merge conflicting comments. Surface conflicts and ask the user.",
-                "After applying, summarize per-comment what changed (or why skipped).",
+                "Skip comments whose status is done or skipped; they are already handled.",
+                "Work on recipient='llm' comments. For recipient='human', draft an answer only; do not change code.",
+                "Order: severity 'high' first, then group by page_url.",
+                "For each comment, Read screenshot_file (crop) and viewport_file (context) to see what the reviewer saw.",
+                "Locate the source from page_url and repo_hints; if version_hints pins a commit, compare it with HEAD and say how far apart they are before editing.",
+                "Find the element via selector, then element_snapshot; for region_type='region' use bbox + screenshot.",
+                "If expected_result is set, that is the definition of done.",
+                "For attachments: type='image' or 'file' has file_path -- Read it; type='link' has url -- WebFetch it.",
+                "Make one commit per comment.",
+                "If a comment is unclear, do not guess: report it as needs_input with one question.",
+                "When finished, write responses.json (schema prototype-feedback-response/v2: comment_id, status fixed|answered|proposed|needs_input|skipped, summary, answer, question_back, commit_sha) next to this file.",
             ],
             "field_reference": {
                 "comments[].bbox": "{x,y,w,h} in CSS viewport pixels (NOT device pixels)",
                 "comments[].viewport": "{w,h,scrollX,scrollY} in CSS px",
                 "comments[].screenshot_file": "Relative path to a PNG cropped to bbox.",
+                "comments[].viewport_file": "Relative path to a downscaled full-viewport PNG, or null.",
+                "comments[].status": "Server work-queue status: new|queued|doing|verified|done|skipped|blocked.",
+                "comments[].intent": "bug|question|polish|behavior-change from the extension, or null for old exports.",
+                "comments[].element_snapshot": "PII-redacted HTML/style/ARIA of the pinned element, or null.",
                 "comments[].attachments[].file_path": "Present for image/file. Read with the Read tool.",
                 "comments[].attachments[].url": "Present for link. Use WebFetch.",
             },
