@@ -100,3 +100,12 @@ def test_newer_edit_carries_recipient_while_new_only():
     with main.db() as c:
         rec = {r["id"]: r["recipient"] for r in c.execute("SELECT id, recipient FROM comments")}
     assert rec == {"a": "human", "b": "llm"}
+
+
+def test_text_update_does_not_touch_updated_at():
+    main.ingest_payload_ex(_p(_c("a", "old", "2026-11-02T00:00:00Z")), "r1.zip")
+    with main.db() as c:
+        c.execute("UPDATE comments SET updated_at='2026-11-05T00:00:00Z' WHERE id='a'")
+    main.ingest_payload_ex(_p(_c("a", "new", "2026-11-03T00:00:00Z")), "r2.zip")
+    with main.db() as c:
+        assert c.execute("SELECT updated_at FROM comments WHERE id='a'").fetchone()[0] == "2026-11-05T00:00:00Z"

@@ -350,8 +350,8 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                 # intent/severity/attachment edits on known comments are not applied (no columns).
                 recipient = (_normalise_recipient(cm.get("recipient_resolved"), cm["id"])
                              if row["status"] == "new" else row["recipient"])
-                c.execute("UPDATE comments SET comment = ?, edited_at = ?, recipient = ?, updated_at = ? WHERE id = ?",
-                          (cm.get("comment"), cm["edited_at"], recipient, now_iso(), cm["id"]))
+                c.execute("UPDATE comments SET comment = ?, edited_at = ?, recipient = ? WHERE id = ?",
+                          (cm.get("comment"), cm["edited_at"], recipient, cm["id"]))
                 updated += 1
     new_comments = [cm for cm in comments if cm.get("id") not in known_rows]
     if comments and not new_comments:
