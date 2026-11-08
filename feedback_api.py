@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Callable, Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 import feedback_state as fs
@@ -159,6 +159,22 @@ def build_responses(rows, batch_id, responded_at: str) -> dict:
         out.append(entry)
     return {"schema": "prototype-feedback-response/v2", "batch_id": batch_id,
             "export_id": None, "responded_at": responded_at, "responses": out}
+
+
+# prototype-feedback-response status (v1 and v2 names) -> server status. An agent never
+# skips: skipped/wontfix block the comment so the user decides.
+RESPONSE_TARGET = {
+    "fixed": "verified", "shipped": "verified", "answered": "verified",
+    "proposed": "blocked", "deferred": "blocked", "needs_input": "blocked",
+    "skipped": "blocked", "wontfix": "blocked", "in_progress": "doing",
+}
+def response_note(entry: dict, target: str) -> Optional[str]:
+    keys = ("question_back", "summary", "answer", "notes") if target == "blocked"         else ("summary", "answer", "notes", "question_back")
+    for k in keys:
+        v = entry.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
 
 
 def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
@@ -442,6 +458,90 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
             rows = c.execute(f"SELECT {RESP_COLS} FROM comments WHERE project_id = ? ORDER BY created_at, id",
                              (pid,)).fetchall()
         return build_responses(rows, None, now_iso())
+
+    def apply_response(c, entry: dict, row) -> str:
+        """Walk one comment to the status an agent response implies; every hop goes through
+        change_status so status_events tell the truth. Returns "applied" or "unchanged" (already in the
+        target status: idempotent repeat). Raises HTTPException(422) with the reason."""
+        status = entry.get("status")
+        target = RESPONSE_TARGET.get(status) if isinstance(status, str) else None
+        if target is None:
+            raise HTTPException(422, f"unknown status {status!r}")
+        cid, cur = row["id"], row["status"]
+        note = response_note(entry, target)
+        if status in ("skipped", "wontfix"):
+            note = f"Skipped by agent: {note}" if note else "Skipped by agent"
+        url = entry.get("verification_url")
+        if isinstance(url, str) and url.strip():
+            note = f"{note} · Verify: {url.strip()}" if note else f"Verify: {url.strip()}"
+        if row["recipient"] == "human":
+            # A human-recipient comment is never queued: the answer is only recorded.
+            if status != "answered":
+                raise HTTPException(422, "human-recipient comments accept only 'answered'")
+            c.execute("UPDATE comments SET status_note = ?, updated_at = ? WHERE id = ?", (note, now_iso(), cid))
+            return "applied"
+        if cur == target:
+            return "unchanged"
+        if cur in ("done", "skipped"):
+            raise HTTPException(422, f"comment is {cur}; reopen it before an agent response applies")
+        if cur == "verified" and target != "blocked":
+            raise HTTPException(422, f"drain may not move verified -> {target}")
+        hops = []
+        if cur in ("new", "blocked"):
+            hops.append(("queued", fs.USER, "via responses.json"))
+            cur = "queued"
+        if cur == "queued":
+            hops.append(("doing", fs.DRAIN, None))
+            cur = "doing"
+        if cur != target:
+            hops.append((target, fs.DRAIN, note))
+        sha = entry.get("commit_sha") if isinstance(entry.get("commit_sha"), str) else None
+        frm = row["status"]
+        for to, actor, hop_note in hops:
+            last = to == hops[-1][0]
+            change_status(c, cid, StatusChange(to=to, expected_from=frm, actor=actor, note=hop_note,
+                                               commit_sha=sha if last and to == "verified" else None))
+            frm = to
+        return "applied"
+
+    @router.post("/api/responses")
+    async def api_responses(request: Request):
+        ctype = request.headers.get("content-type", "")
+        try:
+            if ctype.startswith("multipart/form-data"):
+                upload = (await request.form()).get("file")
+                if upload is None or not hasattr(upload, "read"):
+                    raise HTTPException(400, "multipart body needs a 'file' part")
+                doc = json.loads((await upload.read()).decode("utf-8"))
+            else:
+                doc = json.loads((await request.body()).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as e:
+            raise HTTPException(400, f"body is not valid JSON: {e}")
+        if not isinstance(doc, dict) or not str(doc.get("schema", "")).startswith("prototype-feedback-response/"):
+            raise HTTPException(400, "schema must be prototype-feedback-response/v1 or v2")
+        entries = doc.get("responses")
+        if not isinstance(entries, list):
+            raise HTTPException(400, "responses must be an array")
+        matched = unmatched = applied = unchanged = 0
+        rejected = []
+        with db() as c:
+            for entry in entries:
+                cid = entry.get("comment_id") if isinstance(entry, dict) else None
+                row = c.execute("SELECT id, status, recipient FROM comments WHERE id = ?", (cid,)).fetchone()                     if isinstance(cid, str) else None
+                if row is None:
+                    unmatched += 1
+                    continue
+                matched += 1
+                try:
+                    if apply_response(c, entry, row) == "unchanged":
+                        unchanged += 1
+                    else:
+                        applied += 1
+                except HTTPException as e:
+                    detail = e.detail if isinstance(e.detail, str) else json.dumps(e.detail)
+                    rejected.append({"id": cid, "reason": detail})
+        return {"matched": matched, "unmatched": unmatched, "applied": applied, "unchanged": unchanged,
+                "rejected": rejected}
 
     router.change_status = change_status  # reused by later endpoints in this module
     return router

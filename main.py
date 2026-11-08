@@ -337,6 +337,74 @@ def _normalise_recipient(value, cid) -> str:
     return recipient
 
 
+RESET_KINDS = ("reopen", "reply", "do_it", "edit")
+V6_TOP_KEYS = ("round_note", "repo", "session", "prior_commits", "export_kind", "delta")
+
+
+def _v6_cols(cm: dict) -> dict:
+    """v6 per-comment fields as DB column values (None when the export predates v6)."""
+    def js(v):
+        return json.dumps(v) if v is not None else None
+    extra = {k: cm.get(k) for k in ("build_key", "previous_comment", "screenshot_error") if cm.get(k) is not None}
+    return {
+        "history_json": js(cm.get("history")), "verb": cm.get("verb"),
+        "urgent": (1 if cm["urgent"] else 0) if cm.get("urgent") is not None else None,
+        "round": cm.get("round"), "status_json": js(cm.get("status")),
+        "response_json": js(cm.get("response")), "v6_extra_json": js(extra) if extra else None,
+    }
+
+
+def _export_meta(payload: dict) -> Optional[str]:
+    meta = {k: payload.get(k) for k in V6_TOP_KEYS if payload.get(k) is not None}
+    if isinstance(payload.get("_llm_guide"), (dict, list, str)):
+        meta["_llm_guide"] = payload["_llm_guide"]
+    return json.dumps(meta) if meta else None
+
+
+def _loads(s):
+    try:
+        return json.loads(s) if s else None
+    except ValueError:
+        return None
+
+
+def _newest_history(history) -> Optional[dict]:
+    items = [h for h in history or [] if isinstance(h, dict) and h.get("at")]
+    return max(items, key=lambda h: h["at"]) if items else None
+
+
+def _v6_is_newer(row, cm: dict) -> bool:
+    """True when the incoming status.at or newest history[].at is newer than the stored one."""
+    old_status = _loads(row["status_json"]) or {}
+    old_hist = _newest_history(_loads(row["history_json"]))
+    new_status = cm.get("status") if isinstance(cm.get("status"), dict) else {}
+    new_hist = _newest_history(cm.get("history"))
+    if new_status.get("at") and new_status["at"] > (old_status.get("at") or ""):
+        return True
+    return bool(new_hist and new_hist["at"] > ((old_hist or {}).get("at") or ""))
+
+
+def _copy_history_shots(history, source_dir: Optional[Path], batch_dir: Path) -> None:
+    """Copy history[].screenshot_path files from the archive into the batch folder, keeping the
+    relative path (and so the suffix). Raises 400 when a path escapes the archive."""
+    if source_dir is None or not isinstance(history, list):
+        return
+    root = source_dir.resolve()
+    for h in history:
+        rel = h.get("screenshot_path") if isinstance(h, dict) else None
+        if not isinstance(rel, str) or not rel:
+            continue
+        src = (source_dir / rel).resolve()
+        if not str(src).startswith(str(root)):
+            raise HTTPException(400, f"history screenshot_path escapes archive: {rel}")
+        if src.is_file():
+            dst = (batch_dir / rel).resolve()
+            if not str(dst).startswith(str(batch_dir.resolve())):
+                raise HTTPException(400, f"history screenshot_path escapes archive: {rel}")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+
+
 def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[Path] = None) -> dict:
     """Insert a batch for the comments this server has not seen; update known ones in place.
 
@@ -360,20 +428,45 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
     with db() as c:
         known_rows = {
             r["id"]: r for r in c.execute(
-                f"SELECT id, batch_id, edited_at, status, recipient FROM comments WHERE id IN ({','.join('?' * len(incoming_ids))})",
+                f"SELECT id, batch_id, edited_at, status, recipient, status_json, history_json FROM comments WHERE id IN ({','.join('?' * len(incoming_ids))})",
                 incoming_ids,
             )
         } if incoming_ids else {}
         updated = 0
+        touched_batches: set[str] = set()
         for cm in comments:
             row = known_rows.get(cm.get("id"))
+            if row and _v6_is_newer(row, cm):
+                v6 = _v6_cols(cm)
+                c.execute(f"UPDATE comments SET {', '.join(k + ' = ?' for k in v6)} WHERE id = ?",
+                          (*v6.values(), cm["id"]))
+                _copy_history_shots(cm.get("history"), source_dir, BATCHES / row["batch_id"])
+                newest = _newest_history(cm.get("history"))
+                if newest and newest.get("kind") in RESET_KINDS and row["status"] != "new":
+                    at = now_iso()
+                    c.execute("UPDATE comments SET status = 'new', status_note = NULL, updated_at = ? WHERE id = ?",
+                              (at, cm["id"]))
+                    c.execute("""INSERT INTO status_events (id, comment_id, at, from_status, to_status, actor, note)
+                                 VALUES (?, ?, ?, ?, 'new', 'ingest', ?)""",
+                              (str(uuid.uuid4()), cm["id"], at, row["status"], f"reviewer {newest['kind']}"))
+                    row = dict(row, status="new")
+                    known_rows[cm["id"]] = row
+                touched_batches.add(row["batch_id"])
+                updated += 1
             if row and cm.get("edited_at") and (row["edited_at"] or "") < cm["edited_at"]:
                 # intent/severity/attachment edits on known comments are not applied (no columns).
                 recipient = (_normalise_recipient(cm.get("recipient_resolved"), cm["id"])
                              if row["status"] == "new" else row["recipient"])
                 c.execute("UPDATE comments SET comment = ?, edited_at = ?, recipient = ? WHERE id = ?",
                           (cm.get("comment"), cm["edited_at"], recipient, cm["id"]))
+                touched_batches.add(row["batch_id"])
                 updated += 1
+        meta = _export_meta(payload)
+        if meta:
+            for bid in touched_batches:
+                c.execute("UPDATE batches SET export_meta_json = ? WHERE id = ?", (meta, bid))
+    for bid in touched_batches:
+        write_claude_artifacts(bid)
     new_comments = [cm for cm in comments if cm.get("id") not in known_rows]
     if comments and not new_comments:
         first_known = known_rows[incoming_ids[0]]["batch_id"] if known_rows else None
@@ -395,8 +488,8 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
             c.execute(
                 """INSERT INTO batches
                    (id, ingested_at, schema_version, extension_version, exported_at,
-                    reviewer, project, source_filename, comment_count, repo_hints_json, project_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    reviewer, project, source_filename, comment_count, repo_hints_json, project_id, export_meta_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     batch_id,
                     now_iso(),
@@ -409,6 +502,7 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                     len(new_comments),
                     json.dumps(payload.get("repo_hints") or {}),
                     payload.get("project_id"),
+                    _export_meta(payload),
                 ),
             )
 
@@ -462,6 +556,8 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                     if len(hits) == 1:
                         project_id = hits[0]["project_id"]
 
+                _copy_history_shots(cm.get("history"), source_dir, batch_dir)
+
                 comment_project_ids.add(project_id)
                 recipient = _normalise_recipient(cm.get("recipient_resolved"), cid)
                 viewport_w = (cm.get("viewport") or {}).get("w")
@@ -479,8 +575,9 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                        (id, batch_id, created_at, edited_at, page_url, page_title,
                         region_type, selector, bbox_json, viewport_json, screenshot_path,
                         viewport_path, comment, reviewer, reviewer_email, project, project_id,
-                        recipient, viewport_w, repeat_of, repeat_kind)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        recipient, viewport_w, repeat_of, repeat_kind,
+                        history_json, verb, urgent, round, status_json, response_json, v6_extra_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         cid,
                         batch_id,
@@ -503,6 +600,7 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                         viewport_w,
                         repeat[0] if repeat else None,
                         repeat[1] if repeat else None,
+                        *_v6_cols(cm).values(),
                     ),
                 )
 
@@ -572,6 +670,43 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
     return ingest_payload_ex(payload, source_filename, source_dir)["batch_id"]
 
 
+OPEN_STATUSES = ("new", "queued", "doing")  # the only server_status values an agent works on
+def return_cmd(out_abs: str) -> str:
+    """curl line that posts the batch's responses.json to this server (PFB_HOST/PFB_PORT, default 127.0.0.1:8090)."""
+    host = os.environ.get("PFB_HOST") or "127.0.0.1"
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"  # a bind-all address is not a connect address
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    port = os.environ.get("PFB_PORT") or "8090"
+    return f"curl -F file=@{out_abs}/responses.json http://{host}:{port}/api/responses"
+
+
+PRECEDENCE = ("If you are running the pfb plugin's /pfb:feedback skill, its steps win over this guide. "
+              "Otherwise follow this guide.")
+_PREAMBLE_HEAD = [
+    PRECEDENCE,
+    "Ask the developer in this session, and stop before planning, when the repo or branch is unknown, an "
+    "earlier commit in prior_commits is missing, the batch has more than 30 comments, or a comment needs a "
+    "technical decision the developer owns. Never guess the branch, the repo or a product decision.",
+    "Ask the reviewer (status needs_input with one question_back) only for a product, copy or visual "
+    "preference only the reviewer can give, or when the intent is unclear after reading the text, "
+    "screenshot, element_snapshot and history.",
+    "In this guide, feedback.json means this file: this file is the server's copy of feedback.json, "
+    "with the same field names, limited to the comments that still need work.",
+    "server_status is authoritative: work only on comments listed in comments[]; "
+    "ignore any status.state or delta wording in the embedded guide.",
+]
+
+
+def server_preamble(out_abs: str) -> list[str]:
+    return _PREAMBLE_HEAD + [
+        "Return path: write responses.json next to claude_input.json, then run: " + return_cmd(out_abs)
+        + " . The server applies each status to the known comment ids. If round_note.reviewer_is_developer "
+        "is false, also give responses.json back to the reviewer for Import status in the extension.",
+    ]
+
+
 def write_claude_artifacts(batch_id: str) -> None:
     """Emit slim JSON (paths instead of base64) + a one-line prompt for Claude Code."""
     with db() as c:
@@ -598,6 +733,9 @@ def write_claude_artifacts(batch_id: str) -> None:
     src_by_id = {cm.get("id"): cm for cm in src.get("comments") or [] if isinstance(cm, dict)}
     V5_FIELDS = ("intent", "severity", "element_snapshot", "version_hint", "framework_hint", "sort_index")
 
+    def absolute(rel):
+        return (DATA / rel).resolve().as_posix() if rel else None
+
     atts_by_comment: dict[str, list[dict]] = {}
     for a in att_rows:
         atts_by_comment.setdefault(a["comment_id"], []).append(
@@ -606,16 +744,35 @@ def write_claude_artifacts(batch_id: str) -> None:
                 "name": a["name"],
                 "mime": a["mime"],
                 "size": a["size"],
-                "file_path": a["data_path"],
+                "path": absolute(a["data_path"]),
+                "file_path": absolute(a["data_path"]),  # old name, kept for one release
                 "url": a["url"],
                 "kind": a["kind"],
                 "title": a["title"],
             }
         )
 
+    def history_abs(history):
+        """History screenshot paths point at files copied into the batch folder at ingest."""
+        if not isinstance(history, list):
+            return history
+        out = []
+        for h in history:
+            rel = h.get("screenshot_path") if isinstance(h, dict) else None
+            if isinstance(rel, str) and rel and (BATCHES / batch_id / rel).is_file():
+                h = dict(h, screenshot_path=(BATCHES / batch_id / rel).resolve().as_posix())
+            out.append(h)
+        return out
+
     comments = []
+    already_handled = []
     for r in rows:
+        if r["status"] not in OPEN_STATUSES:
+            already_handled.append({"id": r["id"], "server_status": r["status"]})
+            continue
         s = src_by_id.get(r["id"], {})
+        embedded_status = _loads(r["status_json"])
+        extra = _loads(r["v6_extra_json"]) or {}
         comments.append(
             {
                 "id": r["id"],
@@ -627,17 +784,39 @@ def write_claude_artifacts(batch_id: str) -> None:
                 "region_type": r["region_type"],
                 "selector": r["selector"],
                 "bbox": json.loads(r["bbox_json"] or "{}"),
-                "screenshot_file": r["screenshot_path"],
-                "viewport_file": r["viewport_path"],
+                "screenshot_path": absolute(r["screenshot_path"]),
+                "viewport_screenshot_path": absolute(r["viewport_path"]),
+                "screenshot_file": absolute(r["screenshot_path"]),  # old names, kept for one release
+                "viewport_file": absolute(r["viewport_path"]),
                 "comment": r["comment"],
                 "recipient": r["recipient"],
-                "status": r["status"],
+                "recipient_resolved": r["recipient"],
+                # v6 exports carry their own status object (state/at); the work-queue
+                # status is then only in server_status.
+                "status": embedded_status if embedded_status is not None else r["status"],
+                "server_status": r["status"],
                 "expected_result": r["expected_result"],
                 **{k: s.get(k) for k in V5_FIELDS},
+                "verb": r["verb"],
+                "urgent": None if r["urgent"] is None else bool(r["urgent"]),
+                "round": r["round"],
+                "build_key": extra.get("build_key"),
+                "history": history_abs(_loads(r["history_json"])),
+                "response": _loads(r["response_json"]),
+                "previous_comment": extra.get("previous_comment"),
+                "screenshot_error": extra.get("screenshot_error"),
                 "attachments": atts_by_comment.get(r["id"], []),
             }
         )
 
+    page_index: dict[str, list] = {}
+    for cm in comments:
+        page_index.setdefault(cm["page_url"], []).append(cm["id"])
+
+    meta = _loads(b["export_meta_json"]) or {}
+    out_dir = BATCHES / batch_id
+    out_abs = out_dir.resolve().as_posix()
+    own_guide = meta.get("_llm_guide")
     payload = {
         "schema": "prototype-feedback/v5-slim",
         "exported_at": b["exported_at"],
@@ -646,7 +825,12 @@ def write_claude_artifacts(batch_id: str) -> None:
         "repo_hints": src.get("repo_hints") or json.loads(b["repo_hints_json"] or "{}"),
         "version_hints": src.get("version_hints") or {},
         "comment_count": len(comments),
-        "_llm_guide": {
+        **{k: meta.get(k) for k in V6_TOP_KEYS},
+        "page_index": page_index,
+        **{k: src[k] for k in ("framework_hints", "console_log", "network_log") if src.get(k) is not None},
+        "already_handled": already_handled,
+        "_server_preamble": server_preamble(out_abs),
+        "_llm_guide": own_guide if own_guide is not None else {
             "purpose": "Pinned feedback from a reviewer. Each comment is anchored to a DOM element OR viewport region with a cropped screenshot. Apply the changes the reviewer requests.",
             "how_to_apply": [
                 "Skip comments whose status is done or skipped; they are already handled.",
@@ -659,14 +843,15 @@ def write_claude_artifacts(batch_id: str) -> None:
                 "For attachments: type='image' or 'file' has file_path -- Read it; type='link' has url -- WebFetch it.",
                 "Make one commit per comment.",
                 "If a comment is unclear, do not guess: report it as needs_input with one question.",
-                "When finished, write responses.json (schema prototype-feedback-response/v2: comment_id, status fixed|answered|proposed|needs_input|skipped, summary, answer, question_back, commit_sha) next to this file.",
+                "When finished, write responses.json (schema prototype-feedback-response/v2: comment_id, status fixed|answered|proposed|needs_input|skipped, summary, answer, question_back, commit_sha) next to this file, then run: " + return_cmd(out_abs),
             ],
             "field_reference": {
                 "comments[].bbox": "{x,y,w,h} in CSS viewport pixels (NOT device pixels)",
                 "comments[].viewport": "{w,h,scrollX,scrollY} in CSS px",
-                "comments[].screenshot_file": "Relative path to a PNG cropped to bbox.",
-                "comments[].viewport_file": "Relative path to a downscaled full-viewport PNG, or null.",
-                "comments[].status": "Server work-queue status: new|queued|doing|verified|done|skipped|blocked.",
+                "comments[].screenshot_file": "Absolute path to the image cropped to bbox (WebP, PNG or JPEG: check the file extension).",
+                "comments[].viewport_file": "Absolute path to a downscaled full-viewport image (WebP, PNG or JPEG), or null.",
+                "comments[].status": "v6 exports: the embedded status object {state, at}. Older exports: the server work-queue status string.",
+                "comments[].server_status": "Server work-queue status: new|queued|doing|verified|done|skipped|blocked.",
                 "comments[].intent": "bug|question|polish|behavior-change from the extension, or null for old exports.",
                 "comments[].element_snapshot": "PII-redacted HTML/style/ARIA of the pinned element, or null.",
                 "comments[].attachments[].file_path": "Present for image/file. Read with the Read tool.",
@@ -676,15 +861,17 @@ def write_claude_artifacts(batch_id: str) -> None:
         "comments": comments,
     }
 
-    out_dir = BATCHES / batch_id
     (out_dir / "claude_input.json").write_text(
         json.dumps(payload, indent=2), encoding="utf-8"
     )
     prompt = (
-        f"Read `{(out_dir / 'claude_input.json').as_posix()}`. "
+        f"Read `{out_abs}/claude_input.json`. "
         f"Follow `_llm_guide.how_to_apply`. The screenshots and attachment files "
-        f"referenced by `screenshot_file` / `file_path` live alongside it under "
-        f"`{(out_dir).as_posix()}/`."
+        f"referenced by `screenshot_file` / `file_path` are absolute paths under "
+        f"`{out_abs}/`.\n\n"
+        + "\n".join(server_preamble(out_abs))
+        + f"\n\nWhen finished, write responses.json next to claude_input.json "
+        f"(`{out_abs}/responses.json`), then run: {return_cmd(out_abs)}"
     )
     (out_dir / "claude_prompt.md").write_text(prompt + "\n", encoding="utf-8")
 
@@ -1439,6 +1626,7 @@ def _cli() -> None:
     parser.add_argument("--port", type=int, default=int(os.environ.get("PFB_PORT", "8090")))
     parser.add_argument("--reload", action="store_true")
     args = parser.parse_args()
+    os.environ["PFB_HOST"], os.environ["PFB_PORT"] = args.host, str(args.port)  # return_cmd() reads these
     uvicorn.run("main:app", host=args.host, port=args.port, reload=args.reload)
 
 
