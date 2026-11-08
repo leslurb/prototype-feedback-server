@@ -118,9 +118,9 @@ def test_v6_embeds_export_guide_verbatim_plus_preamble(client, tmp_data_dir):
     pre = " ".join(doc["_server_preamble"])
     assert "If you are running the pfb plugin's /pfb:feedback skill, its steps win over this guide. " \
            "Otherwise follow this guide." in pre
-    assert "curl -F file=@responses.json http://127.0.0.1:8090/api/responses" in pre
+    assert "curl -F file=@" + out.resolve().as_posix() + "/responses.json http://127.0.0.1:8090/api/responses" in pre
     prompt = (out / "claude_prompt.md").read_text(encoding="utf-8")
-    assert "curl -F file=@responses.json http://127.0.0.1:8090/api/responses" in prompt
+    assert "curl -F file=@" + out.resolve().as_posix() + "/responses.json http://127.0.0.1:8090/api/responses" in prompt
     assert "steps win over this guide" in prompt
 
 
@@ -234,3 +234,25 @@ def test_claude_input_uses_the_guides_field_names_and_keeps_the_old_ones(client,
 def test_optional_logs_are_omitted_when_the_export_has_none(client, tmp_data_dir):
     doc = _doc(tmp_data_dir, _ingest_c(client, [_cm("a")]))
     assert "console_log" not in doc and "network_log" not in doc and "framework_hints" not in doc
+
+
+def test_return_command_uses_absolute_responses_path_and_default_port(client, tmp_data_dir, monkeypatch):
+    monkeypatch.delenv("PFB_HOST", raising=False)
+    monkeypatch.delenv("PFB_PORT", raising=False)
+    bid = _ingest_c(client, [_cm("a")])
+    out = (tmp_data_dir / "batches" / bid).resolve().as_posix()
+    cmd = f"curl -F file=@{out}/responses.json http://127.0.0.1:8090/api/responses"
+    doc = _doc(tmp_data_dir, bid)
+    assert cmd in " ".join(doc["_server_preamble"])
+    assert cmd in " ".join(doc["_llm_guide"]["how_to_apply"])
+    assert cmd in (tmp_data_dir / "batches" / bid / "claude_prompt.md").read_text(encoding="utf-8")
+
+
+def test_return_command_follows_pfb_host_and_port(client, tmp_data_dir, monkeypatch):
+    monkeypatch.setenv("PFB_HOST", "10.1.2.3")
+    monkeypatch.setenv("PFB_PORT", "9123")
+    bid = _ingest_c(client, [_cm("a")])
+    assert "http://10.1.2.3:9123/api/responses" in " ".join(_doc(tmp_data_dir, bid)["_server_preamble"])
+    monkeypatch.setenv("PFB_HOST", "0.0.0.0")  # a bind-all address is not a connect address
+    main.write_claude_artifacts(bid)
+    assert "http://127.0.0.1:9123/api/responses" in " ".join(_doc(tmp_data_dir, bid)["_server_preamble"])

@@ -671,10 +671,20 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
 
 
 OPEN_STATUSES = ("new", "queued", "doing")  # the only server_status values an agent works on
-RETURN_CMD = "curl -F file=@responses.json http://127.0.0.1:8090/api/responses"
+def return_cmd(out_abs: str) -> str:
+    """curl line that posts the batch's responses.json to this server (PFB_HOST/PFB_PORT, default 127.0.0.1:8090)."""
+    host = os.environ.get("PFB_HOST") or "127.0.0.1"
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"  # a bind-all address is not a connect address
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    port = os.environ.get("PFB_PORT") or "8090"
+    return f"curl -F file=@{out_abs}/responses.json http://{host}:{port}/api/responses"
+
+
 PRECEDENCE = ("If you are running the pfb plugin's /pfb:feedback skill, its steps win over this guide. "
               "Otherwise follow this guide.")
-SERVER_PREAMBLE = [
+_PREAMBLE_HEAD = [
     PRECEDENCE,
     "Ask the developer in this session, and stop before planning, when the repo or branch is unknown, an "
     "earlier commit in prior_commits is missing, the batch has more than 30 comments, or a comment needs a "
@@ -686,10 +696,15 @@ SERVER_PREAMBLE = [
     "with the same field names, limited to the comments that still need work.",
     "server_status is authoritative: work only on comments listed in comments[]; "
     "ignore any status.state or delta wording in the embedded guide.",
-    "Return path: write responses.json next to claude_input.json, then run: " + RETURN_CMD
-    + " . The server applies each status to the known comment ids. If round_note.reviewer_is_developer "
-    "is false, also give responses.json back to the reviewer for Import status in the extension.",
 ]
+
+
+def server_preamble(out_abs: str) -> list[str]:
+    return _PREAMBLE_HEAD + [
+        "Return path: write responses.json next to claude_input.json, then run: " + return_cmd(out_abs)
+        + " . The server applies each status to the known comment ids. If round_note.reviewer_is_developer "
+        "is false, also give responses.json back to the reviewer for Import status in the extension.",
+    ]
 
 
 def write_claude_artifacts(batch_id: str) -> None:
@@ -814,7 +829,7 @@ def write_claude_artifacts(batch_id: str) -> None:
         "page_index": page_index,
         **{k: src[k] for k in ("framework_hints", "console_log", "network_log") if src.get(k) is not None},
         "already_handled": already_handled,
-        "_server_preamble": SERVER_PREAMBLE,
+        "_server_preamble": server_preamble(out_abs),
         "_llm_guide": own_guide if own_guide is not None else {
             "purpose": "Pinned feedback from a reviewer. Each comment is anchored to a DOM element OR viewport region with a cropped screenshot. Apply the changes the reviewer requests.",
             "how_to_apply": [
@@ -828,7 +843,7 @@ def write_claude_artifacts(batch_id: str) -> None:
                 "For attachments: type='image' or 'file' has file_path -- Read it; type='link' has url -- WebFetch it.",
                 "Make one commit per comment.",
                 "If a comment is unclear, do not guess: report it as needs_input with one question.",
-                "When finished, write responses.json (schema prototype-feedback-response/v2: comment_id, status fixed|answered|proposed|needs_input|skipped, summary, answer, question_back, commit_sha) next to this file, then run: " + RETURN_CMD,
+                "When finished, write responses.json (schema prototype-feedback-response/v2: comment_id, status fixed|answered|proposed|needs_input|skipped, summary, answer, question_back, commit_sha) next to this file, then run: " + return_cmd(out_abs),
             ],
             "field_reference": {
                 "comments[].bbox": "{x,y,w,h} in CSS viewport pixels (NOT device pixels)",
@@ -854,9 +869,9 @@ def write_claude_artifacts(batch_id: str) -> None:
         f"Follow `_llm_guide.how_to_apply`. The screenshots and attachment files "
         f"referenced by `screenshot_file` / `file_path` are absolute paths under "
         f"`{out_abs}/`.\n\n"
-        + "\n".join(SERVER_PREAMBLE)
+        + "\n".join(server_preamble(out_abs))
         + f"\n\nWhen finished, write responses.json next to claude_input.json "
-        f"(`{out_abs}/responses.json`), then run: {RETURN_CMD}"
+        f"(`{out_abs}/responses.json`), then run: {return_cmd(out_abs)}"
     )
     (out_dir / "claude_prompt.md").write_text(prompt + "\n", encoding="utf-8")
 
@@ -1611,6 +1626,7 @@ def _cli() -> None:
     parser.add_argument("--port", type=int, default=int(os.environ.get("PFB_PORT", "8090")))
     parser.add_argument("--reload", action="store_true")
     args = parser.parse_args()
+    os.environ["PFB_HOST"], os.environ["PFB_PORT"] = args.host, str(args.port)  # return_cmd() reads these
     uvicorn.run("main:app", host=args.host, port=args.port, reload=args.reload)
 
 
