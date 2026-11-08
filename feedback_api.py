@@ -140,6 +140,27 @@ def done_priors(c, project_id: str, exclude_id: Optional[str] = None) -> list[di
              "bbox": json.loads(r["bbox_json"] or "{}"), "shipped": bool(r["shipped_at"])} for r in rows]
 
 
+def build_responses(rows, batch_id, responded_at: str) -> dict:
+    """prototype-feedback-response/v2 from comment rows (spec 2026-11-08 §6)."""
+    out = []
+    for r in rows:
+        status = fs.response_status(r["status"], r["recipient"])
+        entry = {"comment_id": r["id"], "status": status, "acted_at": r["updated_at"],
+                 "confirmed": r["status"] == "done"}
+        note = r["status_note"]
+        if status == "needs_input":
+            entry["question_back"] = note
+        elif status == "answered":
+            entry["answer"] = note
+        else:
+            entry["summary"] = note
+        if r["commit_sha"]:
+            entry["commit_sha"] = r["commit_sha"]
+        out.append(entry)
+    return {"schema": "prototype-feedback-response/v2", "batch_id": batch_id,
+            "export_id": None, "responded_at": responded_at, "responses": out}
+
+
 def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
     router = APIRouter()
 
@@ -401,6 +422,26 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
                 return {"repeat": None}
             prior = c.execute("SELECT comment FROM comments WHERE id = ?", (hit[0],)).fetchone()
         return {"repeat": {"id": hit[0], "kind": hit[1], "comment": prior["comment"] if prior else None}}
+
+    RESP_COLS = "id, status, recipient, status_note, commit_sha, updated_at"
+
+    @router.get("/api/rounds/{bid}/responses.json")
+    def api_round_responses(bid: str):
+        with db() as c:
+            if c.execute("SELECT 1 FROM batches WHERE id = ?", (bid,)).fetchone() is None:
+                raise HTTPException(404, f"round {bid} not found")
+            rows = c.execute(f"SELECT {RESP_COLS} FROM comments WHERE batch_id = ? ORDER BY created_at, id",
+                             (bid,)).fetchall()
+        return build_responses(rows, bid, now_iso())
+
+    @router.get("/api/projects/{pid}/responses.json")
+    def api_project_responses(pid: str):
+        with db() as c:
+            if load_project(c, pid) is None:
+                raise HTTPException(404, f"project {pid} not found")
+            rows = c.execute(f"SELECT {RESP_COLS} FROM comments WHERE project_id = ? ORDER BY created_at, id",
+                             (pid,)).fetchall()
+        return build_responses(rows, None, now_iso())
 
     router.change_status = change_status  # reused by later endpoints in this module
     return router
