@@ -68,16 +68,42 @@ def cors_origins(extra: Optional[str]) -> list[str]:
     return [PUBLISHED_EXTENSION_ORIGIN] + [o.strip() for o in (extra or "").split(",") if o.strip()]
 
 
-# The allowlist only governs CORS-enabled reads and preflighted requests (e.g. JSON POSTs):
-# a foreign page can't read our responses or pass a preflight. It does NOT stop "simple"
-# cross-site POSTs (text/plain or form bodies), which browsers send without a preflight.
-# A separate Sec-Fetch-Site/Origin check is planned before Plan D adds extension writes.
+# The CORS allowlist only governs CORS-enabled reads and preflighted requests. It does NOT stop
+# "simple" cross-site POSTs (text/plain or form bodies), so the write guard below does that.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(os.environ.get("PFB_EXTRA_ORIGINS")),
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def write_allowed(method: str, origin: Optional[str], fetch_site: Optional[str],
+                  own_origin: str, allowed: list[str]) -> bool:
+    """Refuse writes a foreign web page could forge. Same-origin (the dashboard), the
+    allow-listed extension origins, and non-browser clients (no Origin, no fetch metadata)
+    pass. Everything else -- cross-site or same-site pages -- is refused."""
+    if method not in UNSAFE_METHODS:
+        return True
+    if fetch_site == "same-origin":
+        return True
+    if origin:
+        return origin == own_origin or origin in allowed
+    return fetch_site in (None, "none")
+
+
+_WRITE_ALLOWED_ORIGINS = cors_origins(os.environ.get("PFB_EXTRA_ORIGINS"))
+
+
+@app.middleware("http")
+async def cross_site_write_guard(request: Request, call_next):
+    own = f"{request.url.scheme}://{request.headers.get('host', '')}"
+    if not write_allowed(request.method, request.headers.get("origin"),
+                         request.headers.get("sec-fetch-site"), own, _WRITE_ALLOWED_ORIGINS):
+        return JSONResponse({"detail": "cross-site write refused"}, status_code=403)
+    return await call_next(request)
 
 
 # ---- DB --------------------------------------------------------------------
