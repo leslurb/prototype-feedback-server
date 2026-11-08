@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Callable, Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 import feedback_state as fs
@@ -159,6 +159,30 @@ def build_responses(rows, batch_id, responded_at: str) -> dict:
         out.append(entry)
     return {"schema": "prototype-feedback-response/v2", "batch_id": batch_id,
             "export_id": None, "responded_at": responded_at, "responses": out}
+
+
+# prototype-feedback-response status (v1 and v2 names) -> server status. None marks a
+# target that depends on the recipient: human comments close as done, llm ones as verified.
+RESPONSE_TARGET = {
+    "fixed": "verified", "shipped": "verified", "answered": "verified",
+    "proposed": "blocked", "deferred": "blocked", "needs_input": "blocked",
+    "skipped": "skipped", "wontfix": "skipped", "in_progress": "doing",
+}
+# What the drain may do from each status toward a target: the intermediate hops.
+DRAIN_PATHS = {
+    ("queued", "doing"): ["doing"], ("queued", "verified"): ["doing", "verified"],
+    ("queued", "blocked"): ["doing", "blocked"], ("doing", "verified"): ["verified"],
+    ("doing", "blocked"): ["blocked"], ("verified", "blocked"): ["blocked"],
+}
+
+
+def response_note(entry: dict, target: str) -> Optional[str]:
+    keys = ("question_back", "summary", "answer", "notes") if target == "blocked"         else ("summary", "answer", "notes", "question_back")
+    for k in keys:
+        v = entry.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
 
 
 def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
@@ -442,6 +466,76 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
             rows = c.execute(f"SELECT {RESP_COLS} FROM comments WHERE project_id = ? ORDER BY created_at, id",
                              (pid,)).fetchall()
         return build_responses(rows, None, now_iso())
+
+    def apply_response(c, entry: dict, row) -> None:
+        """Move one comment per a response entry; raises HTTPException(422) with the reason."""
+        status = entry.get("status")
+        target = RESPONSE_TARGET.get(status) if isinstance(status, str) else None
+        if target is None:
+            raise HTTPException(422, f"unknown status {status!r}")
+        cur, human = row["status"], row["recipient"] == "human"
+        if human and target == "verified":
+            target = "done"
+        if cur == target:
+            raise HTTPException(422, f"already {cur}")
+        note = response_note(entry, target)
+        sha = entry.get("commit_sha") if isinstance(entry.get("commit_sha"), str) else None
+        cid = row["id"]
+        hops = DRAIN_PATHS.get((cur, target))
+        if hops:
+            for i, to in enumerate(hops):
+                last = i == len(hops) - 1
+                change_status(c, cid, StatusChange(to=to, expected_from=cur, actor=fs.DRAIN,
+                                                   note=note if last else None,
+                                                   commit_sha=sha if last and to == "verified" else None))
+                cur = to
+            return
+        # Moves the drain may not make on its own (the user alone skips or closes a human
+        # comment): the response is the agent's, so the gate is passed as the user and the
+        # audit event is then attributed to the drain that actually acted.
+        if target == "skipped" or (human and target == "done" and cur == "new"):
+            change_status(c, cid, StatusChange(to=target, expected_from=cur, actor=fs.USER, note=note))
+            c.execute("""UPDATE status_events SET actor = 'drain' WHERE rowid =
+                         (SELECT rowid FROM status_events WHERE comment_id = ? ORDER BY at DESC, rowid DESC LIMIT 1)""",
+                      (cid,))
+            return
+        raise HTTPException(422, f"{fs.DRAIN} may not move {cur} -> {target}")
+
+    @router.post("/api/responses")
+    async def api_responses(request: Request):
+        ctype = request.headers.get("content-type", "")
+        try:
+            if ctype.startswith("multipart/form-data"):
+                upload = (await request.form()).get("file")
+                if upload is None or not hasattr(upload, "read"):
+                    raise HTTPException(400, "multipart body needs a 'file' part")
+                doc = json.loads((await upload.read()).decode("utf-8"))
+            else:
+                doc = json.loads((await request.body()).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as e:
+            raise HTTPException(400, f"body is not valid JSON: {e}")
+        if not isinstance(doc, dict) or not str(doc.get("schema", "")).startswith("prototype-feedback-response/"):
+            raise HTTPException(400, "schema must be prototype-feedback-response/v1 or v2")
+        entries = doc.get("responses")
+        if not isinstance(entries, list):
+            raise HTTPException(400, "responses must be an array")
+        matched = unmatched = applied = 0
+        rejected = []
+        with db() as c:
+            for entry in entries:
+                cid = entry.get("comment_id") if isinstance(entry, dict) else None
+                row = c.execute("SELECT id, status, recipient FROM comments WHERE id = ?", (cid,)).fetchone()                     if isinstance(cid, str) else None
+                if row is None:
+                    unmatched += 1
+                    continue
+                matched += 1
+                try:
+                    apply_response(c, entry, row)
+                    applied += 1
+                except HTTPException as e:
+                    detail = e.detail if isinstance(e.detail, str) else json.dumps(e.detail)
+                    rejected.append({"id": cid, "reason": detail})
+        return {"matched": matched, "unmatched": unmatched, "applied": applied, "rejected": rejected}
 
     router.change_status = change_status  # reused by later endpoints in this module
     return router
