@@ -177,3 +177,31 @@ def test_requeued_comment_alone_is_listed_and_verified_ones_are_already_handled(
 def test_already_handled_is_empty_when_every_comment_is_open(client, tmp_data_dir):
     bid = _ingest_c(client, [_cm("a")])
     assert _doc(tmp_data_dir, bid)["already_handled"] == []
+
+
+def test_history_screenshots_are_copied_at_ingest_and_emitted_absolute(client, tmp_data_dir):
+    import os
+    hist = [{"kind": "reopen", "at": "2026-11-03T00:00:00Z", "note": "no", "screenshot_path": "history/c1/1-reopen.webp"}]
+    bid = _ingest_c(client, [_cm("c1", history=hist)], files={"history/c1/1-reopen.webp": b"IMG"})
+    shot = _doc(tmp_data_dir, bid)["comments"][0]["history"][0]["screenshot_path"]
+    assert os.path.isabs(shot) and shot.endswith("1-reopen.webp") and os.path.exists(shot)
+    assert open(shot, "rb").read() == b"IMG"
+
+
+def test_history_screenshot_of_a_known_comment_is_copied_on_reingest(client, tmp_data_dir):
+    import os
+    bid = _ingest_c(client, [_cm("c1")])
+    hist = [{"kind": "reopen", "at": "2026-11-03T00:00:00Z", "screenshot_path": "history/c1/2-reopen.png"}]
+    _ingest_c(client, [_cm("c1", history=hist)], files={"history/c1/2-reopen.png": b"PNG2"})
+    shot = _doc(tmp_data_dir, bid)["comments"][0]["history"][0]["screenshot_path"]
+    assert os.path.isabs(shot) and shot.endswith("2-reopen.png") and open(shot, "rb").read() == b"PNG2"
+
+
+def test_history_screenshot_path_escaping_the_archive_is_rejected(client, tmp_data_dir):
+    hist = [{"kind": "reopen", "at": "2026-11-03T00:00:00Z", "screenshot_path": "../evil.webp"}]
+    payload = {"schema": "prototype-feedback/v6", "comments": [_cm("c1", history=hist)]}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("feedback.json", json.dumps(payload))
+    res = client.post("/api/ingest", files={"files": ("r.zip", buf.getvalue(), "application/zip")}).json()
+    assert not res["results"][0]["ok"]

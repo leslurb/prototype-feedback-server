@@ -384,6 +384,27 @@ def _v6_is_newer(row, cm: dict) -> bool:
     return bool(new_hist and new_hist["at"] > ((old_hist or {}).get("at") or ""))
 
 
+def _copy_history_shots(history, source_dir: Optional[Path], batch_dir: Path) -> None:
+    """Copy history[].screenshot_path files from the archive into the batch folder, keeping the
+    relative path (and so the suffix). Raises 400 when a path escapes the archive."""
+    if source_dir is None or not isinstance(history, list):
+        return
+    root = source_dir.resolve()
+    for h in history:
+        rel = h.get("screenshot_path") if isinstance(h, dict) else None
+        if not isinstance(rel, str) or not rel:
+            continue
+        src = (source_dir / rel).resolve()
+        if not str(src).startswith(str(root)):
+            raise HTTPException(400, f"history screenshot_path escapes archive: {rel}")
+        if src.is_file():
+            dst = (batch_dir / rel).resolve()
+            if not str(dst).startswith(str(batch_dir.resolve())):
+                raise HTTPException(400, f"history screenshot_path escapes archive: {rel}")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+
+
 def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[Path] = None) -> dict:
     """Insert a batch for the comments this server has not seen; update known ones in place.
 
@@ -419,6 +440,7 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                 v6 = _v6_cols(cm)
                 c.execute(f"UPDATE comments SET {', '.join(k + ' = ?' for k in v6)} WHERE id = ?",
                           (*v6.values(), cm["id"]))
+                _copy_history_shots(cm.get("history"), source_dir, BATCHES / row["batch_id"])
                 newest = _newest_history(cm.get("history"))
                 if newest and newest.get("kind") in RESET_KINDS and row["status"] != "new":
                     at = now_iso()
@@ -533,6 +555,8 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
                     ).fetchall()
                     if len(hits) == 1:
                         project_id = hits[0]["project_id"]
+
+                _copy_history_shots(cm.get("history"), source_dir, batch_dir)
 
                 comment_project_ids.add(project_id)
                 recipient = _normalise_recipient(cm.get("recipient_resolved"), cid)
@@ -710,6 +734,18 @@ def write_claude_artifacts(batch_id: str) -> None:
             }
         )
 
+    def history_abs(history):
+        """History screenshot paths point at files copied into the batch folder at ingest."""
+        if not isinstance(history, list):
+            return history
+        out = []
+        for h in history:
+            rel = h.get("screenshot_path") if isinstance(h, dict) else None
+            if isinstance(rel, str) and rel and (BATCHES / batch_id / rel).is_file():
+                h = dict(h, screenshot_path=(BATCHES / batch_id / rel).resolve().as_posix())
+            out.append(h)
+        return out
+
     comments = []
     already_handled = []
     for r in rows:
@@ -744,7 +780,7 @@ def write_claude_artifacts(batch_id: str) -> None:
                 "urgent": None if r["urgent"] is None else bool(r["urgent"]),
                 "round": r["round"],
                 "build_key": extra.get("build_key"),
-                "history": _loads(r["history_json"]),
+                "history": history_abs(_loads(r["history_json"])),
                 "response": _loads(r["response_json"]),
                 "previous_comment": extra.get("previous_comment"),
                 "screenshot_error": extra.get("screenshot_error"),
