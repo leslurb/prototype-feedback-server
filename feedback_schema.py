@@ -21,6 +21,13 @@ NEW_COLUMNS = {
         ("repeat_kind", "TEXT"),
         ("status_note", "TEXT"),
         ("updated_at", "TEXT"),
+        ("history_json", "TEXT"),
+        ("verb", "TEXT"),
+        ("urgent", "INTEGER"),
+        ("round", "INTEGER"),
+        ("status_json", "TEXT"),
+        ("response_json", "TEXT"),
+        ("v6_extra_json", "TEXT"),
     ],
     "batches": [
         ("kind", "TEXT NOT NULL DEFAULT 'export'"),
@@ -28,6 +35,7 @@ NEW_COLUMNS = {
         ("shipped_at", "TEXT"),
         ("rereview_sent_at", "TEXT"),
         ("project_id", "TEXT"),
+        ("export_meta_json", "TEXT"),
     ],
     "projects": [
         ("repo", "TEXT"),
