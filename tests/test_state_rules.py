@@ -41,3 +41,16 @@ def test_can_ship_counts_skipped_as_finished_but_not_verified():
     assert can_ship({"done": 3, "skipped": 2}) is True
     assert can_ship({"done": 3, "verified": 1}) is False   # a verified item still needs the user's look
     assert can_ship({}) is False                           # nothing to ship
+
+
+import feedback_state as fs
+
+
+def test_response_status_mapping():
+    llm = {s: fs.response_status(s, "llm") for s in fs.STATUSES}
+    assert llm == {"new": "pending", "queued": "pending", "doing": "in_progress",
+                   "verified": "fixed", "done": "fixed", "skipped": "skipped",
+                   "blocked": "needs_input"}
+    assert fs.response_status("done", "human") == "answered"
+    assert fs.response_status("new", "human") == "pending"
+    assert fs.response_status("mystery", "llm") == "pending"

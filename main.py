@@ -68,16 +68,42 @@ def cors_origins(extra: Optional[str]) -> list[str]:
     return [PUBLISHED_EXTENSION_ORIGIN] + [o.strip() for o in (extra or "").split(",") if o.strip()]
 
 
-# The allowlist only governs CORS-enabled reads and preflighted requests (e.g. JSON POSTs):
-# a foreign page can't read our responses or pass a preflight. It does NOT stop "simple"
-# cross-site POSTs (text/plain or form bodies), which browsers send without a preflight.
-# A separate Sec-Fetch-Site/Origin check is planned before Plan D adds extension writes.
+# The CORS allowlist only governs CORS-enabled reads and preflighted requests. It does NOT stop
+# "simple" cross-site POSTs (text/plain or form bodies), so the write guard below does that.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(os.environ.get("PFB_EXTRA_ORIGINS")),
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def write_allowed(method: str, origin: Optional[str], fetch_site: Optional[str],
+                  own_origin: str, allowed: list[str]) -> bool:
+    """Refuse writes a foreign web page could forge. Same-origin (the dashboard), the
+    allow-listed extension origins, and non-browser clients (no Origin, no fetch metadata)
+    pass. Everything else -- cross-site or same-site pages -- is refused."""
+    if method not in UNSAFE_METHODS:
+        return True
+    if fetch_site == "same-origin":
+        return True
+    if origin:
+        return origin == own_origin or origin in allowed
+    return fetch_site in (None, "none")
+
+
+_WRITE_ALLOWED_ORIGINS = cors_origins(os.environ.get("PFB_EXTRA_ORIGINS"))
+
+
+@app.middleware("http")
+async def cross_site_write_guard(request: Request, call_next):
+    own = f"{request.url.scheme}://{request.headers.get('host', '')}"
+    if not write_allowed(request.method, request.headers.get("origin"),
+                         request.headers.get("sec-fetch-site"), own, _WRITE_ALLOWED_ORIGINS):
+        return JSONResponse({"detail": "cross-site write refused"}, status_code=403)
+    return await call_next(request)
 
 
 # ---- DB --------------------------------------------------------------------
@@ -281,11 +307,25 @@ def now_iso() -> str:
 # ---- Ingest ----------------------------------------------------------------
 
 
-def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Path] = None) -> str:
-    """Insert a batch + its comments + attachments. Returns batch_id.
+def _normalise_recipient(value, cid) -> str:
+    recipient = str(value or "llm").strip().lower()
+    if recipient not in ("llm", "human"):
+        print(f"warning: comment {cid}: unknown recipient_resolved "
+              f"{value!r}, using 'llm'", file=sys.stderr)
+        recipient = "llm"
+    return recipient
+
+
+def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[Path] = None) -> dict:
+    """Insert a batch for the comments this server has not seen; update known ones in place.
+
+    Returns {"batch_id", "new", "known", "updated"}. Comment IDs are stable across re-exports,
+    so a known ID keeps its batch and server status; only its text is refreshed, and only
+    when the incoming edited_at is newer. If every comment is known, no batch is created and
+    batch_id is the batch of the first known comment.
 
     For v1/v2 payloads, screenshots/attachments come from inline base64.
-    For v3 payloads, they come from files inside source_dir (the unzipped temp dir).
+    For v3+ payloads, they come from files inside source_dir (the unzipped temp dir).
     """
     if not isinstance(payload, dict) or "comments" not in payload:
         raise HTTPException(400, "JSON missing 'comments' array")
@@ -294,192 +334,221 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
     if not str(schema).startswith("prototype-feedback/"):
         raise HTTPException(400, f"Unsupported schema: {schema}")
 
+    comments = payload.get("comments", []) or []
+    incoming_ids = [cm.get("id") for cm in comments if cm.get("id")]
+    with db() as c:
+        known_rows = {
+            r["id"]: r for r in c.execute(
+                f"SELECT id, batch_id, edited_at, status, recipient FROM comments WHERE id IN ({','.join('?' * len(incoming_ids))})",
+                incoming_ids,
+            )
+        } if incoming_ids else {}
+        updated = 0
+        for cm in comments:
+            row = known_rows.get(cm.get("id"))
+            if row and cm.get("edited_at") and (row["edited_at"] or "") < cm["edited_at"]:
+                # intent/severity/attachment edits on known comments are not applied (no columns).
+                recipient = (_normalise_recipient(cm.get("recipient_resolved"), cm["id"])
+                             if row["status"] == "new" else row["recipient"])
+                c.execute("UPDATE comments SET comment = ?, edited_at = ?, recipient = ? WHERE id = ?",
+                          (cm.get("comment"), cm["edited_at"], recipient, cm["id"]))
+                updated += 1
+    new_comments = [cm for cm in comments if cm.get("id") not in known_rows]
+    if comments and not new_comments:
+        first_known = known_rows[incoming_ids[0]]["batch_id"] if known_rows else None
+        return {"batch_id": first_known, "new": 0, "known": len(known_rows), "updated": updated}
+
     batch_id = str(uuid.uuid4())
     batch_dir = BATCHES / batch_id
-    (batch_dir / "screenshots").mkdir(parents=True, exist_ok=True)
-    (batch_dir / "attachments").mkdir(parents=True, exist_ok=True)
-    (batch_dir / "viewport-screenshots").mkdir(parents=True, exist_ok=True)
+    try:
+        (batch_dir / "screenshots").mkdir(parents=True, exist_ok=True)
+        (batch_dir / "attachments").mkdir(parents=True, exist_ok=True)
+        (batch_dir / "viewport-screenshots").mkdir(parents=True, exist_ok=True)
 
-    if source_dir is not None:
-        src_json = source_dir / "feedback.json"
-        if src_json.exists():
-            shutil.copyfile(src_json, batch_dir / "feedback.json")
+        if source_dir is not None:
+            src_json = source_dir / "feedback.json"
+            if src_json.exists():
+                shutil.copyfile(src_json, batch_dir / "feedback.json")
 
-    comments = payload.get("comments", []) or []
-
-    with db() as c:
-        c.execute(
-            """INSERT INTO batches
-               (id, ingested_at, schema_version, extension_version, exported_at,
-                reviewer, project, source_filename, comment_count, repo_hints_json, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                batch_id,
-                now_iso(),
-                schema,
-                payload.get("extension_version"),
-                payload.get("exported_at"),
-                payload.get("reviewer"),
-                payload.get("project"),
-                source_filename,
-                len(comments),
-                json.dumps(payload.get("repo_hints") or {}),
-                payload.get("project_id"),
-            ),
-        )
-
-        comment_project_ids = set()
-        for cm in comments:
-            cid = cm.get("id") or str(uuid.uuid4())
-            screenshot_path = None
-
-            # v3: screenshot_path points at a file inside source_dir
-            if cm.get("screenshot_path") and source_dir is not None:
-                src = (source_dir / cm["screenshot_path"]).resolve()
-                if not str(src).startswith(str(source_dir.resolve())):
-                    raise HTTPException(400, f"screenshot_path escapes archive: {cm['screenshot_path']}")
-                if src.exists():
-                    rel = f"batches/{batch_id}/screenshots/{cid}.png"
-                    dst = DATA / rel
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(src, dst)
-                    screenshot_path = rel
-            # v1/v2: screenshot_png_b64 inline
-            elif cm.get("screenshot_png_b64"):
-                rel = f"batches/{batch_id}/screenshots/{cid}.png"
-                write_b64(cm["screenshot_png_b64"], DATA / rel)
-                screenshot_path = rel
-
-            viewport_path = None
-            if cm.get("viewport_screenshot_path") and source_dir is not None:
-                src = (source_dir / cm["viewport_screenshot_path"]).resolve()
-                if not str(src).startswith(str(source_dir.resolve())):
-                    raise HTTPException(400, f"viewport_screenshot_path escapes archive: {cm['viewport_screenshot_path']}")
-                if src.exists():
-                    rel = f"batches/{batch_id}/viewport-screenshots/{cid}.png"
-                    dst = DATA / rel
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(src, dst)
-                    viewport_path = rel
-
-            reviewer_name = cm.get("reviewer") or payload.get("reviewer")
-            reviewer_email = cm.get("reviewer_email") or payload.get("reviewer_email")
-            project_label = cm.get("project") or payload.get("project")
-            project_id = cm.get("project_id") or payload.get("project_id")
-
-            # Auto-tag: if no project_id but the reviewer's email matches a single
-            # project's reviewer roster, attach to that project.
-            if not project_id and reviewer_email:
-                hits = c.execute(
-                    """SELECT DISTINCT project_id FROM project_reviewers
-                       WHERE email = ?""",
-                    (reviewer_email,),
-                ).fetchall()
-                if len(hits) == 1:
-                    project_id = hits[0]["project_id"]
-
-            comment_project_ids.add(project_id)
-            recipient = str(cm.get("recipient_resolved") or "llm").strip().lower()
-            if recipient not in ("llm", "human"):
-                print(f"warning: comment {cid}: unknown recipient_resolved "
-                      f"{cm.get('recipient_resolved')!r}, using 'llm'", file=sys.stderr)
-                recipient = "llm"
-            viewport_w = (cm.get("viewport") or {}).get("w")
-            repeat = None
-            if project_id:
-                priors = feedback_api.done_priors(c, project_id)
-                repeat = feedback_state.classify_repeat(
-                    {"page": feedback_state.normalize_path(cm.get("page_url")),
-                     "selector": cm.get("selector"), "bbox": cm.get("bbox") or {}},
-                    priors,
-                )
-
+        with db() as c:
             c.execute(
-                """INSERT INTO comments
-                   (id, batch_id, created_at, edited_at, page_url, page_title,
-                    region_type, selector, bbox_json, viewport_json, screenshot_path,
-                    viewport_path, comment, reviewer, reviewer_email, project, project_id,
-                    recipient, viewport_w, repeat_of, repeat_kind)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO batches
+                   (id, ingested_at, schema_version, extension_version, exported_at,
+                    reviewer, project, source_filename, comment_count, repo_hints_json, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    cid,
                     batch_id,
-                    cm.get("created_at"),
-                    cm.get("edited_at"),
-                    cm.get("page_url"),
-                    cm.get("page_title"),
-                    cm.get("region_type"),
-                    cm.get("selector"),
-                    json.dumps(cm.get("bbox") or {}),
-                    json.dumps(cm.get("viewport") or {}),
-                    screenshot_path,
-                    viewport_path,
-                    cm.get("comment"),
-                    reviewer_name,
-                    reviewer_email,
-                    project_label,
-                    project_id,
-                    recipient,
-                    viewport_w,
-                    repeat[0] if repeat else None,
-                    repeat[1] if repeat else None,
+                    now_iso(),
+                    schema,
+                    payload.get("extension_version"),
+                    payload.get("exported_at"),
+                    payload.get("reviewer"),
+                    payload.get("project"),
+                    source_filename,
+                    len(new_comments),
+                    json.dumps(payload.get("repo_hints") or {}),
+                    payload.get("project_id"),
                 ),
             )
 
-            # Update reviewer status on the project if matched.
-            if project_id and reviewer_email:
-                c.execute(
-                    """UPDATE project_reviewers
-                       SET status = 'commented'
-                       WHERE project_id = ? AND email = ?""",
-                    (project_id, reviewer_email),
-                )
+            comment_project_ids = set()
+            for cm in new_comments:
+                cid = cm.get("id") or str(uuid.uuid4())
+                screenshot_path = None
 
-            for at in cm.get("attachments") or []:
-                aid = str(uuid.uuid4())
-                rel: Optional[str] = None
-
-                # v3: attachment.path points at a file inside source_dir
-                if at.get("type") in ("image", "file") and at.get("path") and source_dir is not None:
-                    src = (source_dir / at["path"]).resolve()
+                # v3: screenshot_path points at a file inside source_dir
+                if cm.get("screenshot_path") and source_dir is not None:
+                    src = (source_dir / cm["screenshot_path"]).resolve()
                     if not str(src).startswith(str(source_dir.resolve())):
-                        raise HTTPException(400, f"attachment path escapes archive: {at['path']}")
+                        raise HTTPException(400, f"screenshot_path escapes archive: {cm['screenshot_path']}")
                     if src.exists():
-                        fn = f"{aid}__{safe_filename(at.get('name', 'file'))}"
-                        rel = f"batches/{batch_id}/attachments/{fn}"
+                        rel = f"batches/{batch_id}/screenshots/{cid}.png"
                         dst = DATA / rel
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(src, dst)
-                # v1/v2: data_b64 inline
-                elif at.get("type") in ("image", "file") and at.get("data_b64"):
-                    fn = f"{aid}__{safe_filename(at.get('name', 'file'))}"
-                    rel = f"batches/{batch_id}/attachments/{fn}"
-                    write_b64(at["data_b64"], DATA / rel)
+                        screenshot_path = rel
+                # v1/v2: screenshot_png_b64 inline
+                elif cm.get("screenshot_png_b64"):
+                    rel = f"batches/{batch_id}/screenshots/{cid}.png"
+                    write_b64(cm["screenshot_png_b64"], DATA / rel)
+                    screenshot_path = rel
+
+                viewport_path = None
+                if cm.get("viewport_screenshot_path") and source_dir is not None:
+                    src = (source_dir / cm["viewport_screenshot_path"]).resolve()
+                    if not str(src).startswith(str(source_dir.resolve())):
+                        raise HTTPException(400, f"viewport_screenshot_path escapes archive: {cm['viewport_screenshot_path']}")
+                    if src.exists():
+                        rel = f"batches/{batch_id}/viewport-screenshots/{cid}.png"
+                        dst = DATA / rel
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(src, dst)
+                        viewport_path = rel
+
+                reviewer_name = cm.get("reviewer") or payload.get("reviewer")
+                reviewer_email = cm.get("reviewer_email") or payload.get("reviewer_email")
+                project_label = cm.get("project") or payload.get("project")
+                project_id = cm.get("project_id") or payload.get("project_id")
+
+                # Auto-tag: if no project_id but the reviewer's email matches a single
+                # project's reviewer roster, attach to that project.
+                if not project_id and reviewer_email:
+                    hits = c.execute(
+                        """SELECT DISTINCT project_id FROM project_reviewers
+                           WHERE email = ?""",
+                        (reviewer_email,),
+                    ).fetchall()
+                    if len(hits) == 1:
+                        project_id = hits[0]["project_id"]
+
+                comment_project_ids.add(project_id)
+                recipient = _normalise_recipient(cm.get("recipient_resolved"), cid)
+                viewport_w = (cm.get("viewport") or {}).get("w")
+                repeat = None
+                if project_id:
+                    priors = feedback_api.done_priors(c, project_id)
+                    repeat = feedback_state.classify_repeat(
+                        {"page": feedback_state.normalize_path(cm.get("page_url")),
+                         "selector": cm.get("selector"), "bbox": cm.get("bbox") or {}},
+                        priors,
+                    )
+
                 c.execute(
-                    """INSERT INTO attachments
-                       (id, comment_id, type, name, mime, size, data_path, url, kind, title)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO comments
+                       (id, batch_id, created_at, edited_at, page_url, page_title,
+                        region_type, selector, bbox_json, viewport_json, screenshot_path,
+                        viewport_path, comment, reviewer, reviewer_email, project, project_id,
+                        recipient, viewport_w, repeat_of, repeat_kind)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
-                        aid,
                         cid,
-                        at.get("type"),
-                        at.get("name"),
-                        at.get("mime"),
-                        at.get("size"),
-                        rel,
-                        at.get("url"),
-                        at.get("kind"),
-                        at.get("title"),
+                        batch_id,
+                        cm.get("created_at"),
+                        cm.get("edited_at"),
+                        cm.get("page_url"),
+                        cm.get("page_title"),
+                        cm.get("region_type"),
+                        cm.get("selector"),
+                        json.dumps(cm.get("bbox") or {}),
+                        json.dumps(cm.get("viewport") or {}),
+                        screenshot_path,
+                        viewport_path,
+                        cm.get("comment"),
+                        reviewer_name,
+                        reviewer_email,
+                        project_label,
+                        project_id,
+                        recipient,
+                        viewport_w,
+                        repeat[0] if repeat else None,
+                        repeat[1] if repeat else None,
                     ),
                 )
 
-        # No top-level project_id: if every comment landed in one project, the round is that project's.
-        if not payload.get("project_id") and len(comment_project_ids) == 1 and None not in comment_project_ids:
-            c.execute("UPDATE batches SET project_id = ? WHERE id = ?", (comment_project_ids.pop(), batch_id))
+                # Update reviewer status on the project if matched.
+                if project_id and reviewer_email:
+                    c.execute(
+                        """UPDATE project_reviewers
+                           SET status = 'commented'
+                           WHERE project_id = ? AND email = ?""",
+                        (project_id, reviewer_email),
+                    )
+
+                for at in cm.get("attachments") or []:
+                    aid = str(uuid.uuid4())
+                    rel: Optional[str] = None
+
+                    # v3: attachment.path points at a file inside source_dir
+                    if at.get("type") in ("image", "file") and at.get("path") and source_dir is not None:
+                        src = (source_dir / at["path"]).resolve()
+                        if not str(src).startswith(str(source_dir.resolve())):
+                            raise HTTPException(400, f"attachment path escapes archive: {at['path']}")
+                        if src.exists():
+                            fn = f"{aid}__{safe_filename(at.get('name', 'file'))}"
+                            rel = f"batches/{batch_id}/attachments/{fn}"
+                            dst = DATA / rel
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copyfile(src, dst)
+                    # v1/v2: data_b64 inline
+                    elif at.get("type") in ("image", "file") and at.get("data_b64"):
+                        fn = f"{aid}__{safe_filename(at.get('name', 'file'))}"
+                        rel = f"batches/{batch_id}/attachments/{fn}"
+                        write_b64(at["data_b64"], DATA / rel)
+                    c.execute(
+                        """INSERT INTO attachments
+                           (id, comment_id, type, name, mime, size, data_path, url, kind, title)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            aid,
+                            cid,
+                            at.get("type"),
+                            at.get("name"),
+                            at.get("mime"),
+                            at.get("size"),
+                            rel,
+                            at.get("url"),
+                            at.get("kind"),
+                            at.get("title"),
+                        ),
+                    )
+
+            # No top-level project_id: if every comment landed in one project, the round is that project's.
+            if not payload.get("project_id") and len(comment_project_ids) == 1 and None not in comment_project_ids:
+                c.execute("UPDATE batches SET project_id = ? WHERE id = ?", (comment_project_ids.pop(), batch_id))
+    except BaseException:
+        # The DB transaction already rolled back (db() commits only on success);
+        # remove the files this attempt copied so no orphan batch dir remains.
+        shutil.rmtree(batch_dir, ignore_errors=True)
+        raise
 
     # Write a slim "claude_input.json" + "claude_prompt.md" per batch.
     write_claude_artifacts(batch_id)
-    return batch_id
+    return {"batch_id": batch_id, "new": len(new_comments), "known": len(known_rows), "updated": updated}
+
+
+def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Path] = None) -> str:
+    """Backward-compatible wrapper: returns only the batch id."""
+    return ingest_payload_ex(payload, source_filename, source_dir)["batch_id"]
 
 
 def write_claude_artifacts(batch_id: str) -> None:
@@ -499,6 +568,15 @@ def write_claude_artifacts(batch_id: str) -> None:
             (batch_id,),
         ).fetchall()
 
+    src_path = BATCHES / batch_id / "feedback.json"
+    try:
+        src = json.loads(src_path.read_text(encoding="utf-8")) if src_path.exists() else {}
+    except (OSError, ValueError) as e:
+        print(f"warning: batch {batch_id}: unreadable feedback.json ({e}); v5 fields omitted", file=sys.stderr)
+        src = {}
+    src_by_id = {cm.get("id"): cm for cm in src.get("comments") or [] if isinstance(cm, dict)}
+    V5_FIELDS = ("intent", "severity", "element_snapshot", "version_hint", "framework_hint", "sort_index")
+
     atts_by_comment: dict[str, list[dict]] = {}
     for a in att_rows:
         atts_by_comment.setdefault(a["comment_id"], []).append(
@@ -516,6 +594,7 @@ def write_claude_artifacts(batch_id: str) -> None:
 
     comments = []
     for r in rows:
+        s = src_by_id.get(r["id"], {})
         comments.append(
             {
                 "id": r["id"],
@@ -528,32 +607,47 @@ def write_claude_artifacts(batch_id: str) -> None:
                 "selector": r["selector"],
                 "bbox": json.loads(r["bbox_json"] or "{}"),
                 "screenshot_file": r["screenshot_path"],
+                "viewport_file": r["viewport_path"],
                 "comment": r["comment"],
+                "recipient": r["recipient"],
+                "status": r["status"],
+                "expected_result": r["expected_result"],
+                **{k: s.get(k) for k in V5_FIELDS},
                 "attachments": atts_by_comment.get(r["id"], []),
             }
         )
 
     payload = {
-        "schema": "prototype-feedback/v2-slim",
+        "schema": "prototype-feedback/v5-slim",
         "exported_at": b["exported_at"],
         "reviewer": b["reviewer"],
         "project": b["project"],
+        "repo_hints": src.get("repo_hints") or json.loads(b["repo_hints_json"] or "{}"),
+        "version_hints": src.get("version_hints") or {},
         "comment_count": len(comments),
         "_llm_guide": {
-            "purpose": "Pinned feedback from a human reviewer. Each comment is anchored to a DOM element OR viewport region with a cropped screenshot. Apply the changes the reviewer requests.",
+            "purpose": "Pinned feedback from a reviewer. Each comment is anchored to a DOM element OR viewport region with a cropped screenshot. Apply the changes the reviewer requests.",
             "how_to_apply": [
-                "Iterate comments[] in order.",
-                "For each comment, view screenshot_file (PNG cropped to bbox at the reviewer's devicePixelRatio) using the Read tool to see exactly what the reviewer was looking at.",
-                "Locate the source file from page_url (ask the user if uncertain) and find the element via selector. The selector was valid at capture time; if it no longer matches, fall back to nearby visible text from the screenshot.",
-                "For region_type='region' there is no selector; use bbox + screenshot to identify the target element(s).",
-                "For attachments: type='image' or 'file' has file_path -- Read it; type='link' has url -- WebFetch it (Google Docs/Drive may require auth).",
-                "Do not silently merge conflicting comments. Surface conflicts and ask the user.",
-                "After applying, summarize per-comment what changed (or why skipped).",
+                "Skip comments whose status is done or skipped; they are already handled.",
+                "Work on recipient='llm' comments. For recipient='human', draft an answer only; do not change code.",
+                "Order: severity 'high' first, then group by page_url.",
+                "For each comment, Read screenshot_file (crop) and viewport_file (context) to see what the reviewer saw.",
+                "Locate the source from page_url and repo_hints; if version_hints pins a commit, compare it with HEAD and say how far apart they are before editing.",
+                "Find the element via selector, then element_snapshot; for region_type='region' use bbox + screenshot.",
+                "If expected_result is set, that is the definition of done.",
+                "For attachments: type='image' or 'file' has file_path -- Read it; type='link' has url -- WebFetch it.",
+                "Make one commit per comment.",
+                "If a comment is unclear, do not guess: report it as needs_input with one question.",
+                "When finished, write responses.json (schema prototype-feedback-response/v2: comment_id, status fixed|answered|proposed|needs_input|skipped, summary, answer, question_back, commit_sha) next to this file.",
             ],
             "field_reference": {
                 "comments[].bbox": "{x,y,w,h} in CSS viewport pixels (NOT device pixels)",
                 "comments[].viewport": "{w,h,scrollX,scrollY} in CSS px",
                 "comments[].screenshot_file": "Relative path to a PNG cropped to bbox.",
+                "comments[].viewport_file": "Relative path to a downscaled full-viewport PNG, or null.",
+                "comments[].status": "Server work-queue status: new|queued|doing|verified|done|skipped|blocked.",
+                "comments[].intent": "bug|question|polish|behavior-change from the extension, or null for old exports.",
+                "comments[].element_snapshot": "PII-redacted HTML/style/ARIA of the pinned element, or null.",
                 "comments[].attachments[].file_path": "Present for image/file. Read with the Read tool.",
                 "comments[].attachments[].url": "Present for link. Use WebFetch.",
             },
@@ -717,11 +811,11 @@ async def api_ingest(files: list[UploadFile] = File(...)):
                     if not fj.exists():
                         raise HTTPException(400, "ZIP missing feedback.json at root")
                     payload = json.loads(fj.read_text(encoding="utf-8"))
-                    batch_id = ingest_payload(payload, fname, source_dir=tmp)
+                    res = ingest_payload_ex(payload, fname, source_dir=tmp)
             else:
                 payload = json.loads(raw.decode("utf-8"))
-                batch_id = ingest_payload(payload, fname)
-            results.append({"ok": True, "batch_id": batch_id, "filename": fname})
+                res = ingest_payload_ex(payload, fname)
+            results.append({"ok": True, "filename": fname, **res})
         except HTTPException as e:
             results.append({"ok": False, "error": e.detail, "filename": f.filename})
         except Exception as e:
@@ -763,6 +857,7 @@ def delete_comment(comment_id: str):
 
 @app.get("/batch/{batch_id}/claude", response_class=PlainTextResponse)
 def batch_claude_prompt(batch_id: str):
+    write_claude_artifacts(batch_id)
     p = BATCHES / batch_id / "claude_prompt.md"
     if not p.exists():
         raise HTTPException(404, "Claude prompt not generated yet for this batch.")
@@ -771,6 +866,7 @@ def batch_claude_prompt(batch_id: str):
 
 @app.get("/batch/{batch_id}/json")
 def batch_claude_json(batch_id: str):
+    write_claude_artifacts(batch_id)
     p = BATCHES / batch_id / "claude_input.json"
     if not p.exists():
         raise HTTPException(404)

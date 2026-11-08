@@ -128,3 +128,18 @@ def classify_repeat(new: dict, priors: list[dict]) -> Optional[tuple[str, str]]:
         if same:
             return p["id"], ("regression" if p.get("shipped") else "didnt_take")
     return None
+
+
+# Server status -> prototype-feedback-response/v2 status (spec 2026-11-08 §6).
+# "verified" (the drain's self-report) and "done" (the user's confirmation) both read as
+# "fixed" to the extension; "done" additionally sets confirmed=true in the response.
+RESPONSE_STATUS = {
+    "new": "pending", "queued": "pending", "doing": "in_progress",
+    "verified": "fixed", "done": "fixed", "skipped": "skipped", "blocked": "needs_input",
+}
+
+
+def response_status(status: str, recipient: str) -> str:
+    if recipient == "human" and status == "done":
+        return "answered"
+    return RESPONSE_STATUS.get(status, "pending")
