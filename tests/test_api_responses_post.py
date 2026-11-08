@@ -52,28 +52,62 @@ def test_v1_names_and_blocked_mappings_carry_the_note(client):
     assert _state("d")[0][:2] == ("blocked", "later")
 
 
-def test_answered_llm_is_verified_human_is_done(client):
-    _seed([("l", "doing", "llm"), ("h", "new", "human")])
-    r = _post(client, [{"comment_id": "l", "status": "answered", "answer": "yes"},
-                       {"comment_id": "h", "status": "answered", "answer": "monthly"}])
-    assert r.json()["applied"] == 2
+def test_answered_llm_is_verified_with_answer_note(client):
+    _seed([("l", "doing", "llm")])
+    assert _post(client, [{"comment_id": "l", "status": "answered", "answer": "yes"}]).json()["applied"] == 1
     assert _state("l")[0][:2] == ("verified", "yes")
-    assert _state("h")[0][:2] == ("done", "monthly")
-    assert _state("h")[1] == [("new", "done", "drain")]
 
 
-def test_fixed_on_human_comment_is_done(client):
+def test_human_answered_only_stores_note_without_status_change(client):
     _seed([("h", "new", "human")])
-    assert _post(client, [{"comment_id": "h", "status": "fixed", "summary": "ok"}]).json()["applied"] == 1
-    assert _state("h")[0][0] == "done"
+    r = _post(client, [{"comment_id": "h", "status": "answered", "answer": "monthly"}]).json()
+    assert r["applied"] == 1
+    assert _state("h") == (("new", "monthly", None), [])
 
 
-def test_skipped_and_wontfix_become_skipped(client):
+def test_human_comment_rejects_other_statuses(client):
+    _seed([("h", "new", "human")])
+    r = _post(client, [{"comment_id": "h", "status": "fixed", "summary": "x"}]).json()
+    assert r["applied"] == 0 and r["rejected"][0]["id"] == "h"
+    assert _state("h") == (("new", None, None), [])
+
+
+def test_new_comment_is_queued_by_user_then_driven_by_drain(client):
+    _seed([("a", "new", "llm")])
+    assert _post(client, [{"comment_id": "a", "status": "fixed", "summary": "s", "commit_sha": "c1"}]).json()["applied"] == 1
+    st, ev = _state("a")
+    assert st == ("verified", "s", "c1")
+    assert ev == [("new", "queued", "user"), ("queued", "doing", "drain"), ("doing", "verified", "drain")]
+
+
+def test_blocked_comment_is_requeued_then_driven(client):
+    _seed([("a", "blocked", "llm")])
+    assert _post(client, [{"comment_id": "a", "status": "fixed", "summary": "s"}]).json()["applied"] == 1
+    st, ev = _state("a")
+    assert st[0] == "verified"
+    assert ev == [("blocked", "queued", "user"), ("queued", "doing", "drain"), ("doing", "verified", "drain")]
+
+
+def test_skipped_and_wontfix_become_blocked_with_agent_note(client):
     _seed([("s", "queued", "llm"), ("w", "new", "llm")])
     r = _post(client, [{"comment_id": "s", "status": "skipped", "summary": "dup"},
                        {"comment_id": "w", "status": "wontfix", "summary": "by design"}])
     assert r.json()["applied"] == 2
-    assert _state("s")[0][0] == "skipped" and _state("w")[0][0] == "skipped"
+    assert _state("s")[0][:2] == ("blocked", "Skipped by agent: dup")
+    assert _state("w")[0][:2] == ("blocked", "Skipped by agent: by design")
+    assert all(e[2] in ("user", "drain") for cid in "sw" for e in _state(cid)[1])
+
+
+def test_verification_url_is_appended_to_the_note(client):
+    _seed([("a", "doing", "llm")])
+    _post(client, [{"comment_id": "a", "status": "fixed", "summary": "s", "verification_url": "https://p.dev/x"}])
+    assert _state("a")[0][1] == "s · Verify: https://p.dev/x"
+
+
+def test_in_progress_moves_queued_to_doing(client):
+    _seed([("a", "queued", "llm")])
+    assert _post(client, [{"comment_id": "a", "status": "in_progress"}]).json()["applied"] == 1
+    assert _state("a")[0][0] == "doing"
 
 
 def test_unknown_ids_are_counted_not_errors(client):
@@ -84,14 +118,13 @@ def test_unknown_ids_are_counted_not_errors(client):
 
 
 def test_transition_rules_are_respected_with_reasons(client):
-    _seed([("new1", "new", "llm"), ("dn", "done", "llm"), ("bl", "blocked", "llm"), ("v", "verified", "llm")])
-    r = _post(client, [{"comment_id": "new1", "status": "fixed"}, {"comment_id": "dn", "status": "fixed"},
-                       {"comment_id": "bl", "status": "fixed"}, {"comment_id": "v", "status": "fixed"},
-                       {"comment_id": "v", "status": "weird"}]).json()
-    assert r["matched"] == 5 and r["applied"] == 0
-    assert {x["id"] for x in r["rejected"]} == {"new1", "dn", "bl", "v"}
+    _seed([("dn", "done", "llm"), ("sk", "skipped", "llm"), ("v", "verified", "llm")])
+    r = _post(client, [{"comment_id": "dn", "status": "fixed"}, {"comment_id": "sk", "status": "fixed"},
+                       {"comment_id": "v", "status": "fixed"}, {"comment_id": "v", "status": "weird"}]).json()
+    assert r["matched"] == 4 and r["applied"] == 0
+    assert {x["id"] for x in r["rejected"]} == {"dn", "sk", "v"} and len(r["rejected"]) == 4
     assert all(x["reason"] for x in r["rejected"])
-    assert _state("new1")[0][0] == "new" and _state("dn")[0][0] == "done"
+    assert _state("dn")[0][0] == "done" and _state("sk")[0][0] == "skipped"
 
 
 def test_verified_can_be_downgraded_to_blocked(client):

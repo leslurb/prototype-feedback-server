@@ -161,21 +161,13 @@ def build_responses(rows, batch_id, responded_at: str) -> dict:
             "export_id": None, "responded_at": responded_at, "responses": out}
 
 
-# prototype-feedback-response status (v1 and v2 names) -> server status. None marks a
-# target that depends on the recipient: human comments close as done, llm ones as verified.
+# prototype-feedback-response status (v1 and v2 names) -> server status. An agent never
+# skips: skipped/wontfix block the comment so the user decides.
 RESPONSE_TARGET = {
     "fixed": "verified", "shipped": "verified", "answered": "verified",
     "proposed": "blocked", "deferred": "blocked", "needs_input": "blocked",
-    "skipped": "skipped", "wontfix": "skipped", "in_progress": "doing",
+    "skipped": "blocked", "wontfix": "blocked", "in_progress": "doing",
 }
-# What the drain may do from each status toward a target: the intermediate hops.
-DRAIN_PATHS = {
-    ("queued", "doing"): ["doing"], ("queued", "verified"): ["doing", "verified"],
-    ("queued", "blocked"): ["doing", "blocked"], ("doing", "verified"): ["verified"],
-    ("doing", "blocked"): ["blocked"], ("verified", "blocked"): ["blocked"],
-}
-
-
 def response_note(entry: dict, target: str) -> Optional[str]:
     keys = ("question_back", "summary", "answer", "notes") if target == "blocked"         else ("summary", "answer", "notes", "question_back")
     for k in keys:
@@ -468,38 +460,47 @@ def make_router(db: Callable, now_iso: Callable[[], str]) -> APIRouter:
         return build_responses(rows, None, now_iso())
 
     def apply_response(c, entry: dict, row) -> None:
-        """Move one comment per a response entry; raises HTTPException(422) with the reason."""
+        """Walk one comment to the status an agent response implies; every hop goes through
+        change_status so status_events tell the truth. Raises HTTPException(422) with the reason."""
         status = entry.get("status")
         target = RESPONSE_TARGET.get(status) if isinstance(status, str) else None
         if target is None:
             raise HTTPException(422, f"unknown status {status!r}")
-        cur, human = row["status"], row["recipient"] == "human"
-        if human and target == "verified":
-            target = "done"
+        cid, cur = row["id"], row["status"]
+        note = response_note(entry, target)
+        if status in ("skipped", "wontfix"):
+            note = f"Skipped by agent: {note}" if note else "Skipped by agent"
+        url = entry.get("verification_url")
+        if isinstance(url, str) and url.strip():
+            note = f"{note} · Verify: {url.strip()}" if note else f"Verify: {url.strip()}"
+        if row["recipient"] == "human":
+            # A human-recipient comment is never queued: the answer is only recorded.
+            if status != "answered":
+                raise HTTPException(422, "human-recipient comments accept only 'answered'")
+            c.execute("UPDATE comments SET status_note = ?, updated_at = ? WHERE id = ?", (note, now_iso(), cid))
+            return
         if cur == target:
             raise HTTPException(422, f"already {cur}")
-        note = response_note(entry, target)
+        if cur in ("done", "skipped"):
+            raise HTTPException(422, f"comment is {cur}; reopen it before an agent response applies")
+        if cur == "verified" and target != "blocked":
+            raise HTTPException(422, f"drain may not move verified -> {target}")
+        hops = []
+        if cur in ("new", "blocked"):
+            hops.append(("queued", fs.USER, "via responses.json"))
+            cur = "queued"
+        if cur == "queued":
+            hops.append(("doing", fs.DRAIN, None))
+            cur = "doing"
+        if cur != target:
+            hops.append((target, fs.DRAIN, note))
         sha = entry.get("commit_sha") if isinstance(entry.get("commit_sha"), str) else None
-        cid = row["id"]
-        hops = DRAIN_PATHS.get((cur, target))
-        if hops:
-            for i, to in enumerate(hops):
-                last = i == len(hops) - 1
-                change_status(c, cid, StatusChange(to=to, expected_from=cur, actor=fs.DRAIN,
-                                                   note=note if last else None,
-                                                   commit_sha=sha if last and to == "verified" else None))
-                cur = to
-            return
-        # Moves the drain may not make on its own (the user alone skips or closes a human
-        # comment): the response is the agent's, so the gate is passed as the user and the
-        # audit event is then attributed to the drain that actually acted.
-        if target == "skipped" or (human and target == "done" and cur == "new"):
-            change_status(c, cid, StatusChange(to=target, expected_from=cur, actor=fs.USER, note=note))
-            c.execute("""UPDATE status_events SET actor = 'drain' WHERE rowid =
-                         (SELECT rowid FROM status_events WHERE comment_id = ? ORDER BY at DESC, rowid DESC LIMIT 1)""",
-                      (cid,))
-            return
-        raise HTTPException(422, f"{fs.DRAIN} may not move {cur} -> {target}")
+        frm = row["status"]
+        for to, actor, hop_note in hops:
+            last = to == hops[-1][0]
+            change_status(c, cid, StatusChange(to=to, expected_from=frm, actor=actor, note=hop_note,
+                                               commit_sha=sha if last and to == "verified" else None))
+            frm = to
 
     @router.post("/api/responses")
     async def api_responses(request: Request):
