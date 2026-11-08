@@ -348,184 +348,190 @@ def ingest_payload_ex(payload: dict, source_filename: str, source_dir: Optional[
 
     batch_id = str(uuid.uuid4())
     batch_dir = BATCHES / batch_id
-    (batch_dir / "screenshots").mkdir(parents=True, exist_ok=True)
-    (batch_dir / "attachments").mkdir(parents=True, exist_ok=True)
-    (batch_dir / "viewport-screenshots").mkdir(parents=True, exist_ok=True)
+    try:
+        (batch_dir / "screenshots").mkdir(parents=True, exist_ok=True)
+        (batch_dir / "attachments").mkdir(parents=True, exist_ok=True)
+        (batch_dir / "viewport-screenshots").mkdir(parents=True, exist_ok=True)
 
-    if source_dir is not None:
-        src_json = source_dir / "feedback.json"
-        if src_json.exists():
-            shutil.copyfile(src_json, batch_dir / "feedback.json")
+        if source_dir is not None:
+            src_json = source_dir / "feedback.json"
+            if src_json.exists():
+                shutil.copyfile(src_json, batch_dir / "feedback.json")
 
-    with db() as c:
-        c.execute(
-            """INSERT INTO batches
-               (id, ingested_at, schema_version, extension_version, exported_at,
-                reviewer, project, source_filename, comment_count, repo_hints_json, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                batch_id,
-                now_iso(),
-                schema,
-                payload.get("extension_version"),
-                payload.get("exported_at"),
-                payload.get("reviewer"),
-                payload.get("project"),
-                source_filename,
-                len(new_comments),
-                json.dumps(payload.get("repo_hints") or {}),
-                payload.get("project_id"),
-            ),
-        )
-
-        comment_project_ids = set()
-        for cm in new_comments:
-            cid = cm.get("id") or str(uuid.uuid4())
-            screenshot_path = None
-
-            # v3: screenshot_path points at a file inside source_dir
-            if cm.get("screenshot_path") and source_dir is not None:
-                src = (source_dir / cm["screenshot_path"]).resolve()
-                if not str(src).startswith(str(source_dir.resolve())):
-                    raise HTTPException(400, f"screenshot_path escapes archive: {cm['screenshot_path']}")
-                if src.exists():
-                    rel = f"batches/{batch_id}/screenshots/{cid}.png"
-                    dst = DATA / rel
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(src, dst)
-                    screenshot_path = rel
-            # v1/v2: screenshot_png_b64 inline
-            elif cm.get("screenshot_png_b64"):
-                rel = f"batches/{batch_id}/screenshots/{cid}.png"
-                write_b64(cm["screenshot_png_b64"], DATA / rel)
-                screenshot_path = rel
-
-            viewport_path = None
-            if cm.get("viewport_screenshot_path") and source_dir is not None:
-                src = (source_dir / cm["viewport_screenshot_path"]).resolve()
-                if not str(src).startswith(str(source_dir.resolve())):
-                    raise HTTPException(400, f"viewport_screenshot_path escapes archive: {cm['viewport_screenshot_path']}")
-                if src.exists():
-                    rel = f"batches/{batch_id}/viewport-screenshots/{cid}.png"
-                    dst = DATA / rel
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(src, dst)
-                    viewport_path = rel
-
-            reviewer_name = cm.get("reviewer") or payload.get("reviewer")
-            reviewer_email = cm.get("reviewer_email") or payload.get("reviewer_email")
-            project_label = cm.get("project") or payload.get("project")
-            project_id = cm.get("project_id") or payload.get("project_id")
-
-            # Auto-tag: if no project_id but the reviewer's email matches a single
-            # project's reviewer roster, attach to that project.
-            if not project_id and reviewer_email:
-                hits = c.execute(
-                    """SELECT DISTINCT project_id FROM project_reviewers
-                       WHERE email = ?""",
-                    (reviewer_email,),
-                ).fetchall()
-                if len(hits) == 1:
-                    project_id = hits[0]["project_id"]
-
-            comment_project_ids.add(project_id)
-            recipient = str(cm.get("recipient_resolved") or "llm").strip().lower()
-            if recipient not in ("llm", "human"):
-                print(f"warning: comment {cid}: unknown recipient_resolved "
-                      f"{cm.get('recipient_resolved')!r}, using 'llm'", file=sys.stderr)
-                recipient = "llm"
-            viewport_w = (cm.get("viewport") or {}).get("w")
-            repeat = None
-            if project_id:
-                priors = feedback_api.done_priors(c, project_id)
-                repeat = feedback_state.classify_repeat(
-                    {"page": feedback_state.normalize_path(cm.get("page_url")),
-                     "selector": cm.get("selector"), "bbox": cm.get("bbox") or {}},
-                    priors,
-                )
-
+        with db() as c:
             c.execute(
-                """INSERT INTO comments
-                   (id, batch_id, created_at, edited_at, page_url, page_title,
-                    region_type, selector, bbox_json, viewport_json, screenshot_path,
-                    viewport_path, comment, reviewer, reviewer_email, project, project_id,
-                    recipient, viewport_w, repeat_of, repeat_kind)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO batches
+                   (id, ingested_at, schema_version, extension_version, exported_at,
+                    reviewer, project, source_filename, comment_count, repo_hints_json, project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    cid,
                     batch_id,
-                    cm.get("created_at"),
-                    cm.get("edited_at"),
-                    cm.get("page_url"),
-                    cm.get("page_title"),
-                    cm.get("region_type"),
-                    cm.get("selector"),
-                    json.dumps(cm.get("bbox") or {}),
-                    json.dumps(cm.get("viewport") or {}),
-                    screenshot_path,
-                    viewport_path,
-                    cm.get("comment"),
-                    reviewer_name,
-                    reviewer_email,
-                    project_label,
-                    project_id,
-                    recipient,
-                    viewport_w,
-                    repeat[0] if repeat else None,
-                    repeat[1] if repeat else None,
+                    now_iso(),
+                    schema,
+                    payload.get("extension_version"),
+                    payload.get("exported_at"),
+                    payload.get("reviewer"),
+                    payload.get("project"),
+                    source_filename,
+                    len(new_comments),
+                    json.dumps(payload.get("repo_hints") or {}),
+                    payload.get("project_id"),
                 ),
             )
 
-            # Update reviewer status on the project if matched.
-            if project_id and reviewer_email:
-                c.execute(
-                    """UPDATE project_reviewers
-                       SET status = 'commented'
-                       WHERE project_id = ? AND email = ?""",
-                    (project_id, reviewer_email),
-                )
+            comment_project_ids = set()
+            for cm in new_comments:
+                cid = cm.get("id") or str(uuid.uuid4())
+                screenshot_path = None
 
-            for at in cm.get("attachments") or []:
-                aid = str(uuid.uuid4())
-                rel: Optional[str] = None
-
-                # v3: attachment.path points at a file inside source_dir
-                if at.get("type") in ("image", "file") and at.get("path") and source_dir is not None:
-                    src = (source_dir / at["path"]).resolve()
+                # v3: screenshot_path points at a file inside source_dir
+                if cm.get("screenshot_path") and source_dir is not None:
+                    src = (source_dir / cm["screenshot_path"]).resolve()
                     if not str(src).startswith(str(source_dir.resolve())):
-                        raise HTTPException(400, f"attachment path escapes archive: {at['path']}")
+                        raise HTTPException(400, f"screenshot_path escapes archive: {cm['screenshot_path']}")
                     if src.exists():
-                        fn = f"{aid}__{safe_filename(at.get('name', 'file'))}"
-                        rel = f"batches/{batch_id}/attachments/{fn}"
+                        rel = f"batches/{batch_id}/screenshots/{cid}.png"
                         dst = DATA / rel
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(src, dst)
-                # v1/v2: data_b64 inline
-                elif at.get("type") in ("image", "file") and at.get("data_b64"):
-                    fn = f"{aid}__{safe_filename(at.get('name', 'file'))}"
-                    rel = f"batches/{batch_id}/attachments/{fn}"
-                    write_b64(at["data_b64"], DATA / rel)
+                        screenshot_path = rel
+                # v1/v2: screenshot_png_b64 inline
+                elif cm.get("screenshot_png_b64"):
+                    rel = f"batches/{batch_id}/screenshots/{cid}.png"
+                    write_b64(cm["screenshot_png_b64"], DATA / rel)
+                    screenshot_path = rel
+
+                viewport_path = None
+                if cm.get("viewport_screenshot_path") and source_dir is not None:
+                    src = (source_dir / cm["viewport_screenshot_path"]).resolve()
+                    if not str(src).startswith(str(source_dir.resolve())):
+                        raise HTTPException(400, f"viewport_screenshot_path escapes archive: {cm['viewport_screenshot_path']}")
+                    if src.exists():
+                        rel = f"batches/{batch_id}/viewport-screenshots/{cid}.png"
+                        dst = DATA / rel
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(src, dst)
+                        viewport_path = rel
+
+                reviewer_name = cm.get("reviewer") or payload.get("reviewer")
+                reviewer_email = cm.get("reviewer_email") or payload.get("reviewer_email")
+                project_label = cm.get("project") or payload.get("project")
+                project_id = cm.get("project_id") or payload.get("project_id")
+
+                # Auto-tag: if no project_id but the reviewer's email matches a single
+                # project's reviewer roster, attach to that project.
+                if not project_id and reviewer_email:
+                    hits = c.execute(
+                        """SELECT DISTINCT project_id FROM project_reviewers
+                           WHERE email = ?""",
+                        (reviewer_email,),
+                    ).fetchall()
+                    if len(hits) == 1:
+                        project_id = hits[0]["project_id"]
+
+                comment_project_ids.add(project_id)
+                recipient = str(cm.get("recipient_resolved") or "llm").strip().lower()
+                if recipient not in ("llm", "human"):
+                    print(f"warning: comment {cid}: unknown recipient_resolved "
+                          f"{cm.get('recipient_resolved')!r}, using 'llm'", file=sys.stderr)
+                    recipient = "llm"
+                viewport_w = (cm.get("viewport") or {}).get("w")
+                repeat = None
+                if project_id:
+                    priors = feedback_api.done_priors(c, project_id)
+                    repeat = feedback_state.classify_repeat(
+                        {"page": feedback_state.normalize_path(cm.get("page_url")),
+                         "selector": cm.get("selector"), "bbox": cm.get("bbox") or {}},
+                        priors,
+                    )
+
                 c.execute(
-                    """INSERT INTO attachments
-                       (id, comment_id, type, name, mime, size, data_path, url, kind, title)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO comments
+                       (id, batch_id, created_at, edited_at, page_url, page_title,
+                        region_type, selector, bbox_json, viewport_json, screenshot_path,
+                        viewport_path, comment, reviewer, reviewer_email, project, project_id,
+                        recipient, viewport_w, repeat_of, repeat_kind)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
-                        aid,
                         cid,
-                        at.get("type"),
-                        at.get("name"),
-                        at.get("mime"),
-                        at.get("size"),
-                        rel,
-                        at.get("url"),
-                        at.get("kind"),
-                        at.get("title"),
+                        batch_id,
+                        cm.get("created_at"),
+                        cm.get("edited_at"),
+                        cm.get("page_url"),
+                        cm.get("page_title"),
+                        cm.get("region_type"),
+                        cm.get("selector"),
+                        json.dumps(cm.get("bbox") or {}),
+                        json.dumps(cm.get("viewport") or {}),
+                        screenshot_path,
+                        viewport_path,
+                        cm.get("comment"),
+                        reviewer_name,
+                        reviewer_email,
+                        project_label,
+                        project_id,
+                        recipient,
+                        viewport_w,
+                        repeat[0] if repeat else None,
+                        repeat[1] if repeat else None,
                     ),
                 )
 
-        # No top-level project_id: if every comment landed in one project, the round is that project's.
-        if not payload.get("project_id") and len(comment_project_ids) == 1 and None not in comment_project_ids:
-            c.execute("UPDATE batches SET project_id = ? WHERE id = ?", (comment_project_ids.pop(), batch_id))
+                # Update reviewer status on the project if matched.
+                if project_id and reviewer_email:
+                    c.execute(
+                        """UPDATE project_reviewers
+                           SET status = 'commented'
+                           WHERE project_id = ? AND email = ?""",
+                        (project_id, reviewer_email),
+                    )
+
+                for at in cm.get("attachments") or []:
+                    aid = str(uuid.uuid4())
+                    rel: Optional[str] = None
+
+                    # v3: attachment.path points at a file inside source_dir
+                    if at.get("type") in ("image", "file") and at.get("path") and source_dir is not None:
+                        src = (source_dir / at["path"]).resolve()
+                        if not str(src).startswith(str(source_dir.resolve())):
+                            raise HTTPException(400, f"attachment path escapes archive: {at['path']}")
+                        if src.exists():
+                            fn = f"{aid}__{safe_filename(at.get('name', 'file'))}"
+                            rel = f"batches/{batch_id}/attachments/{fn}"
+                            dst = DATA / rel
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copyfile(src, dst)
+                    # v1/v2: data_b64 inline
+                    elif at.get("type") in ("image", "file") and at.get("data_b64"):
+                        fn = f"{aid}__{safe_filename(at.get('name', 'file'))}"
+                        rel = f"batches/{batch_id}/attachments/{fn}"
+                        write_b64(at["data_b64"], DATA / rel)
+                    c.execute(
+                        """INSERT INTO attachments
+                           (id, comment_id, type, name, mime, size, data_path, url, kind, title)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            aid,
+                            cid,
+                            at.get("type"),
+                            at.get("name"),
+                            at.get("mime"),
+                            at.get("size"),
+                            rel,
+                            at.get("url"),
+                            at.get("kind"),
+                            at.get("title"),
+                        ),
+                    )
+
+            # No top-level project_id: if every comment landed in one project, the round is that project's.
+            if not payload.get("project_id") and len(comment_project_ids) == 1 and None not in comment_project_ids:
+                c.execute("UPDATE batches SET project_id = ? WHERE id = ?", (comment_project_ids.pop(), batch_id))
+    except BaseException:
+        # The DB transaction already rolled back (db() commits only on success);
+        # remove the files this attempt copied so no orphan batch dir remains.
+        shutil.rmtree(batch_dir, ignore_errors=True)
+        raise
 
     # Write a slim "claude_input.json" + "claude_prompt.md" per batch.
     write_claude_artifacts(batch_id)

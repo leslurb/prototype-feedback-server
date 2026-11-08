@@ -1,4 +1,7 @@
 # tests/test_ingest_idempotent.py
+import pytest
+from fastapi import HTTPException
+
 import main
 
 
@@ -67,3 +70,13 @@ def test_api_ingest_reports_counts(client):
         r = client.post("/api/ingest", files={"files": ("r.zip", buf.getvalue(), "application/zip")})
     res = r.json()["results"][0]
     assert (res["ok"], res["new"], res["known"]) == (True, 0, 1)
+
+
+def test_failed_ingest_removes_its_batch_dir(tmp_data_dir):
+    bad = _p(_c("x"))
+    bad["comments"][0]["screenshot_path"] = "../../escape.png"
+    before = set((tmp_data_dir / "batches").iterdir())
+    with pytest.raises(HTTPException):
+        main.ingest_payload_ex(bad, "bad.zip", source_dir=tmp_data_dir / "nonexistent-src")
+    assert set((tmp_data_dir / "batches").iterdir()) == before
+    assert _batches() == []
