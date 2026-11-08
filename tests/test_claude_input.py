@@ -19,6 +19,7 @@ def test_claude_input_carries_v5_fields_and_status(client, tmp_data_dir):
             "id": "c1", "page_url": "https://a.dev/", "selector": "h1", "bbox": {}, "viewport": {"w": 1280},
             "comment": "fix it", "intent": "bug", "severity": "high", "recipient_resolved": "llm",
             "element_snapshot": {"tag": "h1"}, "version_hint": {"commit": "a1f3c9e"},
+            "framework_hint": {"name": "next"}, "sort_index": 3,
         }],
     }
     res = client.post("/api/ingest", files={"files": ("r.zip", _zip(payload), "application/zip")}).json()
@@ -35,7 +36,9 @@ def test_claude_input_carries_v5_fields_and_status(client, tmp_data_dir):
         ("bug", "high", "llm", "queued", "title fits")
     assert cm["element_snapshot"] == {"tag": "h1"}
     assert cm["version_hint"] == {"commit": "a1f3c9e"}
-    assert "viewport_file" in cm
+    assert cm["viewport_file"] is None
+    assert cm["framework_hint"] == {"name": "next"}
+    assert cm["sort_index"] == 3
     assert any("responses.json" in step for step in doc["_llm_guide"]["how_to_apply"])
 
 

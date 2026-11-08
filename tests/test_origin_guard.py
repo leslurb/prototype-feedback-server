@@ -44,3 +44,8 @@ def test_no_origin_no_metadata_is_allowed(client):
 def test_reads_are_never_guarded(client):
     r = client.get("/api/overview", headers={"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"})
     assert r.status_code == 200
+
+
+def test_null_origin_is_refused(client):
+    r = client.post(URL, json={"name": "x"}, headers={"Origin": "null", "Sec-Fetch-Site": "cross-site"})
+    assert r.status_code == 403
