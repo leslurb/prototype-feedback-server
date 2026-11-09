@@ -118,9 +118,9 @@ def test_v6_embeds_export_guide_verbatim_plus_preamble(client, tmp_data_dir):
     pre = " ".join(doc["_server_preamble"])
     assert "If you are running the pfb plugin's /pfb:feedback skill, its steps win over this guide. " \
            "Otherwise follow this guide." in pre
-    assert "curl -F file=@" + out.resolve().as_posix() + "/responses.json http://127.0.0.1:8090/api/responses" in pre
+    assert 'curl -F "file=@' + out.resolve().as_posix() + '/responses.json" http://127.0.0.1:8090/api/responses' in pre
     prompt = (out / "claude_prompt.md").read_text(encoding="utf-8")
-    assert "curl -F file=@" + out.resolve().as_posix() + "/responses.json http://127.0.0.1:8090/api/responses" in prompt
+    assert 'curl -F "file=@' + out.resolve().as_posix() + '/responses.json" http://127.0.0.1:8090/api/responses' in prompt
     assert "steps win over this guide" in prompt
 
 
@@ -241,7 +241,7 @@ def test_return_command_uses_absolute_responses_path_and_default_port(client, tm
     monkeypatch.delenv("PFB_PORT", raising=False)
     bid = _ingest_c(client, [_cm("a")])
     out = (tmp_data_dir / "batches" / bid).resolve().as_posix()
-    cmd = f"curl -F file=@{out}/responses.json http://127.0.0.1:8090/api/responses"
+    cmd = f'curl -F "file=@{out}/responses.json" http://127.0.0.1:8090/api/responses'
     doc = _doc(tmp_data_dir, bid)
     assert cmd in " ".join(doc["_server_preamble"])
     assert cmd in " ".join(doc["_llm_guide"]["how_to_apply"])
@@ -256,3 +256,26 @@ def test_return_command_follows_pfb_host_and_port(client, tmp_data_dir, monkeypa
     monkeypatch.setenv("PFB_HOST", "0.0.0.0")  # a bind-all address is not a connect address
     main.write_claude_artifacts(bid)
     assert "http://127.0.0.1:9123/api/responses" in " ".join(_doc(tmp_data_dir, bid)["_server_preamble"])
+
+
+def test_return_command_quotes_a_path_with_spaces(monkeypatch):
+    monkeypatch.delenv("PFB_HOST", raising=False)
+    monkeypatch.delenv("PFB_PORT", raising=False)
+    monkeypatch.setattr(main, "_SEEN_SERVER", None)
+    cmd = main.return_cmd("C:/Users/Some One/pfb data/batches/b1")
+    assert cmd == 'curl -F "file=@C:/Users/Some One/pfb data/batches/b1/responses.json" http://127.0.0.1:8090/api/responses'
+
+
+def test_return_command_uses_the_port_the_server_answered_on(monkeypatch):
+    # Plain `uvicorn main:app --port 9123` sets no PFB_PORT; the first request's socket tells us the port.
+    monkeypatch.delenv("PFB_HOST", raising=False)
+    monkeypatch.delenv("PFB_PORT", raising=False)
+    monkeypatch.setattr(main, "_SEEN_SERVER", None)
+    main.note_server_addr(("testserver", 80))  # test clients report a name: ignored
+    assert "http://127.0.0.1:8090/" in main.return_cmd("/x")
+    main.note_server_addr(("127.0.0.1", 9123))
+    assert "http://127.0.0.1:9123/api/responses" in main.return_cmd("/x")
+    main.note_server_addr(("127.0.0.1", 9999))  # first real address sticks
+    assert ":9123/" in main.return_cmd("/x")
+    monkeypatch.setenv("PFB_PORT", "8500")  # an explicit setting still wins
+    assert ":8500/" in main.return_cmd("/x")
