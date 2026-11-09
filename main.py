@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import io
+import ipaddress
 import json
 import mimetypes
 import os
@@ -100,6 +101,7 @@ _WRITE_ALLOWED_ORIGINS = cors_origins(os.environ.get("PFB_EXTRA_ORIGINS"))
 
 @app.middleware("http")
 async def cross_site_write_guard(request: Request, call_next):
+    note_server_addr(request.scope.get("server"))
     own = f"{request.url.scheme}://{request.headers.get('host', '')}"
     if not write_allowed(request.method, request.headers.get("origin"),
                          request.headers.get("sec-fetch-site"), own, _WRITE_ALLOWED_ORIGINS):
@@ -671,15 +673,38 @@ def ingest_payload(payload: dict, source_filename: str, source_dir: Optional[Pat
 
 
 OPEN_STATUSES = ("new", "queued", "doing")  # the only server_status values an agent works on
+# The address this server is really listening on, taken from the first request's socket. Lets the
+# return command name the right port when the server was started with plain `uvicorn main:app --port N`
+# (the CLI sets PFB_HOST/PFB_PORT itself; uvicorn alone sets nothing).
+_SEEN_SERVER: tuple[str, int] | None = None
+
+
+def note_server_addr(server) -> None:
+    """Remember a request's local socket address. Only IP literals count (test clients report a name)."""
+    global _SEEN_SERVER
+    if _SEEN_SERVER is not None or not server or len(server) != 2:
+        return
+    try:
+        ipaddress.ip_address(str(server[0]))
+        _SEEN_SERVER = (str(server[0]), int(server[1]))
+    except (ValueError, TypeError):
+        pass
+
+
 def return_cmd(out_abs: str) -> str:
-    """curl line that posts the batch's responses.json to this server (PFB_HOST/PFB_PORT, default 127.0.0.1:8090)."""
-    host = os.environ.get("PFB_HOST") or "127.0.0.1"
+    """curl line that posts the batch's responses.json to this server.
+
+    Address: PFB_HOST/PFB_PORT, else the socket the server answered on, else 127.0.0.1:8090.
+    The file argument is double-quoted, so a path with spaces works in bash, PowerShell and cmd.
+    """
+    seen_host, seen_port = _SEEN_SERVER or ("127.0.0.1", 8090)
+    host = os.environ.get("PFB_HOST") or seen_host
     if host in ("0.0.0.0", "::"):
         host = "127.0.0.1"  # a bind-all address is not a connect address
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    port = os.environ.get("PFB_PORT") or "8090"
-    return f"curl -F file=@{out_abs}/responses.json http://{host}:{port}/api/responses"
+    port = os.environ.get("PFB_PORT") or str(seen_port)
+    return f'curl -F "file=@{out_abs}/responses.json" http://{host}:{port}/api/responses'
 
 
 PRECEDENCE = ("If you are running the pfb plugin's /pfb:feedback skill, its steps win over this guide. "
